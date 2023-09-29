@@ -1,12 +1,12 @@
 from setuptools import setup
 
-setup(name='qgutils',
-      version='0.5.0',
-      description='QG routines',
-      url='http://github.com/bderembl/qgutils',
-      author='bderembl',
-      author_email='bruno.deremble@ens.fr',
+setup(name='myCROCOtools',
+      version='0.0.1',
+      description='CROCO routines',
+      url='https://github.com/quentinjamet/myCROCOtools',
+      author='qjamet',
+      author_email='quentin.jamet@inria.fr',
       license='MIT',
-      packages=['qgutils'],
+      packages=['myCROCOtools'],
       install_requires=['numpy', 'scipy', 'xarray' ],
       zip_safe=False)
