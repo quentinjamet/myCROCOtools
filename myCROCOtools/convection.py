@@ -56,37 +56,52 @@ def mld(ds, strat=1.9620001275490499e-6):
 #------------------
 # buoyancy fluxes
 #------------------
-def wb(ds, qnet=500, tserie='last'):
+def wb(ds, tracer='b', qnet=500, tserie='last'):
   '''
-  Compute vertical buoyancy fluxes
+  Compute vertical fluxes for tracer 'tracer'
 
   Parameters:
         - ds: the data 
+        - tracer: 't' temperature.
+                  's' salinity
+                  'b' (default), buoyancy (requires an EOS ; only linear, temperature driven coded for now (10/11/2023))
 	- qnet: surface net heat flux [W/m^2]. Atm convention, +=up.
 	- tserie: 'full'           -> full time series
 	-         'last' (default) -> only last time record
 
   Output:
-	- wb, computed as cell interface (omega points) for both
+	- wb, computed at cell interface (omega points) for both
           nbq AND hydrostatic simulations. 
           For the latter, wb is first computed at rho-point and then interpolated.
           Surface boundary condition is specified through qnet.
+
+  Comments:
+        - reference density, temperature (and salinity) are recomputed 
+          as the basin averaged quantities.
   '''
 
   #-- constant --
-  #rho0   = 1024.              # [kg/m3] -- from croco.in
-  g      = 9.81               # [m/s2]  -- from croco
   alphaT = 2.e-4              # [K^{-1}]-- from croco.in
   Cp     = 3985.              # [J K^{-1} kg^{-1}] -- from scalar.h
-  if ds.attrs['CPP-options'].find('RESET_RHO0')!= -1:
-    print('-- Recompute rho0 based on model averaged rho --')
+  g      = 9.81               # [m/s2]  -- from croco
+
+  #--
+  if tracer == 'b':
+    print('-- compute BUOYANCY vertical flux --')
     rho0 = 1000 + (ds.rho[0, :, 1:-1, 1:-1]*ds.dx_rho[1:-1, 1:-1]*ds.dy_rho[1:-1, 1:-1]*ds.dz_rho[:, 1:-1, 1:-1]).sum() \
                  /(ds.dx_rho[1:-1, 1:-1]*ds.dy_rho[1:-1, 1:-1]*ds.dz_rho[:, 1:-1, 1:-1]).sum()
-  else:
-    rho0 = 1024.0
-  print('-->> rho0 set to %f kg/m3' % rho0)
-  #
-  wb0    = (g*alphaT*qnet)/(rho0*Cp)
+    wb0 = (g*alphaT*qnet)/(rho0*Cp)
+    bbb = -(ds.rho+1000 - rho0)*g / rho0
+  elif tracer == 't':
+    print('-- compute TEMPERATURE vertical flux --')
+    T0 = (ds.temp[0, :, 1:-1, 1:-1]*ds.dx_rho[1:-1, 1:-1]*ds.dy_rho[1:-1, 1:-1]*ds.dz_rho[:, 1:-1, 1:-1]).sum() \
+        /(ds.dx_rho[1:-1, 1:-1]*ds.dy_rho[1:-1, 1:-1]*ds.dz_rho[:, 1:-1, 1:-1]).sum()
+    wb0 = qnet/(rho0*Cp)
+    bbb = ds.temp-T0
+  elif tracer == 's':
+    print('-- compute SALINITY vertical flux --')
+    print('-->> TO BE DONE <<--')
+    sys.exit()
  
   #--
   if tserie=='full':
@@ -98,9 +113,7 @@ def wb(ds, qnet=500, tserie='last'):
   else:
     nbq=False
 
-
   #--
-  bbb = -(ds.rho+1000 - rho0)*g / rho0
   if nbq:
     if tserie=='last':
       wb  = xr.zeros_like(ds.w[-1, ...])
