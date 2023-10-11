@@ -6,8 +6,6 @@ import xarray as xr
 from scipy.signal import find_peaks   # to find mixed layer depth
 import xrft                           # xarray fourier transform
 
-from .grid import *
-
 
 #------------------
 # mixed layer depth
@@ -58,47 +56,128 @@ def mld(ds, strat=1.9620001275490499e-6):
 #------------------
 # buoyancy fluxes
 #------------------
-def wb(ds, qnet=-500, tserie='last', ttt=-1):
+def wb(ds, qnet=500, tserie='last'):
   '''
   Compute vertical buoyancy fluxes
 
   Parameters:
         - ds: the data 
-	- qnet: surface net heat flux [W/m^2]
-	- tserie: 'last' (default) -> last time record of ds
-		  'full'           -> full time series
-	-         'partial'        -> only ttt time records
+	- qnet: surface net heat flux [W/m^2]. Atm convention, +=up.
+	- tserie: 'full'           -> full time series
+	-         'last' (default) -> only last time record
+
+  Output:
+	- wb, computed as cell interface (omega points) for both
+          nbq AND hydrostatic simulations. 
+          For the latter, wb is first computed at rho-point and then interpolated.
+          Surface boundary condition is specified through qnet.
   '''
 
   #-- constant --
-  rho0   = 1024.              # [kg/m3] -- from croco.in
+  #rho0   = 1024.              # [kg/m3] -- from croco.in
   g      = 9.81               # [m/s2]  -- from croco
   alphaT = 2.e-4              # [K^{-1}]-- from croco.in
   Cp     = 3985.              # [J K^{-1} kg^{-1}] -- from scalar.h
+  if ds.attrs['CPP-options'].find('RESET_RHO0')!= -1:
+    print('-- Recompute rho0 based on model averaged rho --')
+    rho0 = 1000 + (ds.rho[0, :, 1:-1, 1:-1]*ds.dx_rho[1:-1, 1:-1]*ds.dy_rho[1:-1, 1:-1]*ds.dz_rho[:, 1:-1, 1:-1]).sum() \
+                 /(ds.dx_rho[1:-1, 1:-1]*ds.dy_rho[1:-1, 1:-1]*ds.dz_rho[:, 1:-1, 1:-1]).sum()
+  else:
+    rho0 = 1024.0
+  print('-->> rho0 set to %f kg/m3' % rho0)
+  #
+  wb0    = (g*alphaT*qnet)/(rho0*Cp)
  
   #--
-  wb0 = (g*alphaT*qnet)/(rho0*Cp)
-  bbb = (ds.rho - (rho0-1000)) *g / rho0
-  wb  = xr.zeros_like(ds.w)
-  if tserie == 'full': 
-    wb               = xr.zeros_like(ds.w)
-    wb[:, -1, ...]   = wb0
-    wb[:, 1:-1, ...] = ds.w[:, 1:-1, ...] * \
-                       0.5*(bbb[:, 1:, ...].data+bbb[:, :-1, ...].data)
-  elif tserie == 'partial':
-    nt = len(ttt)
-    wb               = xr.zeros_like(ds.w[ttt, ...])
-    wb[:, -1, ...]   = wb0
-    wb[:, 1:-1, ...] = ds.w[ttt, 1:-1, ...] * \
-                       0.5*(bbb[ttt, 1:, ...].data+bbb[ttt, :-1, ...].data)
-  elif tserie == 'last':
-    wb               = xr.zeros_like(ds.w[-1, ...])
-    wb[-1, ...]   = wb0
-    wb[1:-1, ...] = ds.w[-1, 1:-1, ...] * \
-                    0.5*(bbb[-1, 1:, ...].data+bbb[-1, :-1, ...].data)
+  if tserie=='full':
+    nt=ds.dims['time']
+    ttt=np.arange(nt)
+  #
+  if ds.attrs['CPP-options'].find('NBQ')!= -1:
+    nbq=True
   else:
-    print("-- ERROR: please specify tserie properly (full, last, partial)")
-    sys.exit()
+    nbq=False
+
+
+  #--
+  bbb = -(ds.rho+1000 - rho0)*g / rho0
+  if nbq:
+    if tserie=='last':
+      wb  = xr.zeros_like(ds.w[-1, ...])
+      wb[-1, ...]   = wb0
+      wb[1:-1, ...] = ds.w[-1, 1:-1, ...] * \
+                      0.5*(bbb[-1, 1:, ...].data+bbb[-1, :-1, ...].data)
+    else:
+      wb  = xr.zeros_like(ds.w)
+      wb[:, -1, ...]   = wb0
+      wb[:, 1:-1, ...] = ds.w[:, 1:-1, ...] * \
+                         0.5*(bbb[:, 1:, ...].data+bbb[:, :-1, ...].data)
+  else:
+    if tserie=='last':
+      tmp = ds.w[-1, ...]*bbb[-1, ...]
+      wb  = xr.zeros_like(ds.omega[-1, ...])
+      wb[-1, ...] = wb0
+      wb[1:-1, ...] = 0.5*(tmp[1:, ...].data+tmp[:-1, ...].data)
+    else:
+      tmp = ds.w*bbb
+      wb  = xr.zeros_like(ds.omega)
+      wb[:, -1, ...] = wb0
+      wb[:, 1:-1, ...] = 0.5*(tmp[:, 1:, ...].data+tmp[:, :-1, ...].data)
 
   return wb
 
+
+#-----------
+# KE spectra
+#-----------
+def kespect(ds, tserie='last', ttt=[-1]):
+  '''
+  Compute 2D isotropic KE power spectra, 
+  assuming isotropic and hoogeneous horizontal resolution.
+
+  Parameters:
+	- ds: the data
+	- tserie: 'full'             -> full time series
+	-         'partial' (defalt) -> only ttt time records
+  '''
+
+  #-- parameters --
+  dxy = ds.dx_rho[1:-1, 1:-1].mean(dim=['eta_rho', 'xi_rho']).data
+  if 's_w' in ds.w.dims:
+    nbq=True
+  else:
+    nbq=False
+
+  #--
+  if tserie=='full':
+    nt=ds.dims['time']
+    ttt=np.arange(nt)
+  else:
+    nt=len(ttt)
+
+  ds_spectra={}
+  for it in range(nt):
+    da = xr.Dataset( )
+    da["uvel"] = (['z', 'y', 'x'], \
+                  0.5*(ds.u[it, :, 1:-1, :-1].data + ds.u[ttt[it], :, 1:-1, 1:].data) )
+    da["vvel"] = (['z', 'y', 'x'], \
+                  0.5*(ds.v[it, :, :-1, 1:-1].data + ds.v[ttt[it], :, 1:, 1:-1].data) )
+    if nbq:
+      da["wvel"] = (['z', 'y', 'x'], \
+                    0.5*(ds.w[it, :-1, 1:-1, 1:-1].data + ds.w[ttt[it], 1:, 1:-1, 1:-1].data) )
+    else:
+      da["wvel"] = (['z', 'y', 'x'],  ds.w[ttt[it], :, 1:-1, 1:-1].data )
+    #- compute dk -
+    u_dft = xrft.dft(da.uvel, \
+                 dim=['x', 'y', 'z'], true_phase=True, true_amplitude=False).compute()
+    dk = u_dft["freq_x"].spacing
+    #- compute spectra -
+    ufft = xrft.isotropic_power_spectrum(da.uvel, \
+           dim=['x', 'y'], true_phase=True, true_amplitude=False).compute()
+    vfft = xrft.isotropic_power_spectrum(da.vvel, \
+           dim=['x', 'y'], true_phase=True, true_amplitude=False).compute()
+    wfft = xrft.isotropic_power_spectrum(da.wvel, \
+           dim=['x', 'y'], true_phase=True, true_amplitude=False).compute()
+    ds_spectra[it] = 0.5*( (abs(ufft.data)**2 + abs(vfft.data)**2 + abs(wfft.data)**2) * dk**2 ).sum(axis=0) * dxy
+
+  return ds_spectra, ufft.freq_r
