@@ -1,10 +1,12 @@
 #!/usr/bin/env python
 
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import xarray as xr
-from scipy.signal import find_peaks   # to find mixed layer depth
-import xrft                           # xarray fourier transform
+from   xgcm         import Grid
+from   scipy.signal import find_peaks   # to find mixed layer depth
+import xrft                             # xarray fourier transform
 
 
 #------------------
@@ -23,49 +25,64 @@ def mld(ds, strat=1.9620001275490499e-6):
 	- kmld: associated vertical grid index 
   '''
 
+  #####################
+  #- define xgcm grid -
+  if 'CPP-options' in ds.attrs:
+      cpp = 'CPP-options'
+  else:
+      cpp = 'CPPS'
+  #
+  coords={'x':{'center':'xi_rho',  'left':'xi_u'},
+          'y':{'center':'eta_rho', 'left':'eta_v'},
+          'z':{'center':'s_rho',   'outer':'s_w'}}
+  grid = Grid(ds,
+         coords=coords,
+         periodic=True)
+  #####################
+
   #-- constant --
   g=9.81
   rho0=1024
 
-  #-- dimension and grid --
-  [nt, nr, ny, nx] = [ds.dims['time'], ds.dims['s_rho'], ds.dims['eta_rho']-2, ds.dims['xi_rho']-2]
-  if 'time' in ds.dz_w.dims:
-    print('-- Vertical mesh is time variable ; only consider first time step')
-    zw_1d =  ds.z_w[0, :, 1:-1, 1:-1].mean(dim=['xi_rho','eta_rho'])
-    dz_1d = ds.dz_w[0, :, 1:-1, 1:-1].mean(dim=['xi_rho','eta_rho'])
-  else:
-    zw_1d =  ds.z_w[:, 1:-1, 1:-1].mean(dim=['xi_rho','eta_rho'])
-    dz_1d = ds.dz_w[:, 1:-1, 1:-1].mean(dim=['xi_rho','eta_rho'])
+  #-- compute --
+  ds['N2_m']  = -g/rho0 * grid.diff(ds.rho.mean(dim=['xi_rho','eta_rho']), 'z') / ds.dz_w.mean(dim=['xi_rho','eta_rho'])
+  # correct for upper and lower values because xgcm assumed periodic boundary conditions
+  ds.N2_m[:,0]   = ds.N2_m[:, -1] = 0.0
+  #
 
-  mld  = np.zeros(nt)
-  kmld = np.zeros(nt)
-  for iit in range(nt):
-    print('-- Compute mld for time: ', iit, "/", nt, end="\r")
-    #
-    rho_m = ds.rho[iit, :, 1:-1, 1:-1].mean(dim=['xi_rho','eta_rho'])
-    N2_m  = xr.zeros_like(zw_1d)
-    N2_m[1:-1] = -g/rho0 * (rho_m[1:None].data-rho_m[:-1].data)/dz_1d[1:-1] 
+  mld  = np.zeros_like(ds.time)
+  kmld = np.zeros_like(ds.time)
+  for iit in range(ds.dims['time']):
+    print('-- Compute mld for time: ', iit, "/", ds.dims['time'], end="\r")
     # find peaks (à la Guillaume!) 
-    peaks, _ = find_peaks(N2_m, height=strat)
+    peaks, _ = find_peaks(ds.N2_m[iit], height=strat)
     kmld[iit] = peaks[-1] 
-    mld[iit]  = zw_1d[peaks[-1]]
+    if 'time' in ds.z_w.dims:
+      mld[iit]  = ds.z_w.mean(dim=['xi_rho','eta_rho'])[iit, peaks[-1]]
+    else:
+      mld[iit]  = ds.z_w.mean(dim=['xi_rho','eta_rho'])[peaks[-1]]
+ 
+  ds['mld'] = mld
+  ds['kmld'] = kmld
 
-  return mld, kmld
+  ds = ds.drop_vars(["N2_m"])
+
+  return ds
 
 
 #------------------
 # buoyancy fluxes
 #------------------
-def wb(ds, tracer='b', qnet=500, tserie='last'):
+def wb(ds, tracer='b', sbcs=None, tserie='last'):
   '''
   Compute vertical fluxes for tracer 'tracer'
 
   Parameters:
         - ds: the data 
-        - tracer: 't' temperature.
-                  's' salinity
+        - tracer: 'T' temperature
+                  'S' salinity (to be coded)
                   'b' (default), buoyancy (requires an EOS ; only linear, temperature driven coded for now (10/11/2023))
-	- qnet: surface net heat flux [W/m^2]. Atm convention, +=up.
+	- sbcs: surface net heat flux [W/m^2]. Atm convention, +=up.
 	- tserie: 'full'           -> full time series
 	-         'last' (default) -> only last time record
 
@@ -73,35 +90,43 @@ def wb(ds, tracer='b', qnet=500, tserie='last'):
 	- wb, computed at cell interface (omega points) for both
           nbq AND hydrostatic simulations. 
           For the latter, wb is first computed at rho-point and then interpolated.
-          Surface boundary condition is specified through qnet.
+          Surface boundary condition is specified through sbcs.
 
   Comments:
         - reference density, temperature (and salinity) are recomputed 
           as the basin averaged quantities.
+	- compressible_NS_paper.ipynb for implementation with xgcm
   '''
 
   #-- constant --
   alphaT = 2.e-4              # [K^{-1}]-- from croco.in
   Cp     = 3985.              # [J K^{-1} kg^{-1}] -- from scalar.h
   g      = 9.81               # [m/s2]  -- from croco
+  rho0   = 1000.0 + (ds.rho[0, ...]*ds.dx_rho*ds.dy_rho*ds.dz_rho).sum() \
+                   /(ds.dx_rho*ds.dy_rho*ds.dz_rho).sum()
 
   #--
   if tracer == 'b':
     print('-- compute BUOYANCY vertical flux --')
-    rho0 = 1000 + (ds.rho[0, :, 1:-1, 1:-1]*ds.dx_rho[1:-1, 1:-1]*ds.dy_rho[1:-1, 1:-1]*ds.dz_rho[:, 1:-1, 1:-1]).sum() \
-                 /(ds.dx_rho[1:-1, 1:-1]*ds.dy_rho[1:-1, 1:-1]*ds.dz_rho[:, 1:-1, 1:-1]).sum()
-    wb0 = (g*alphaT*qnet)/(rho0*Cp)
+    if sbcs != None:
+      wb0 = (g*alphaT*sbcs)/(rho0*Cp)
+    else:
+      wb0 = 0.0
     bbb = -(ds.rho+1000 - rho0)*g / rho0
-  elif tracer == 't':
+  elif tracer == 'T':
     print('-- compute TEMPERATURE vertical flux --')
-    T0 = (ds.temp[0, :, 1:-1, 1:-1]*ds.dx_rho[1:-1, 1:-1]*ds.dy_rho[1:-1, 1:-1]*ds.dz_rho[:, 1:-1, 1:-1]).sum() \
-        /(ds.dx_rho[1:-1, 1:-1]*ds.dy_rho[1:-1, 1:-1]*ds.dz_rho[:, 1:-1, 1:-1]).sum()
-    wb0 = qnet/(rho0*Cp)
+    T0 = (ds.temp[0, ...]*ds.dx_rho*ds.dy_rho*ds.dz_rho).sum() \
+        /(ds.dx_rho*ds.dy_rho*ds.dz_rho).sum()
+    if sbcs != None:
+      wb0 = sbcs/(rho0*Cp)
+    else:
+      wb0 = 0.0
     bbb = ds.temp-T0
-  elif tracer == 's':
+  elif tracer == 'S':
     print('-- compute SALINITY vertical flux --')
-    print('-->> TO BE DONE <<--')
-    sys.exit()
+    sys.exit("-->> TO BE DONE <<--")
+  else:
+    sys.exit("==>> expected: b, T, S ; provided: %s" % tracer)
  
   #--
   if tserie=='full':
@@ -138,59 +163,3 @@ def wb(ds, tracer='b', qnet=500, tserie='last'):
       wb[:, 1:-1, ...] = 0.5*(tmp[:, 1:, ...].data+tmp[:, :-1, ...].data)
 
   return wb
-
-
-#-----------
-# KE spectra
-#-----------
-def kespect(ds, tserie='last', ttt=[-1]):
-  '''
-  Compute 2D isotropic KE power spectra, 
-  assuming isotropic and hoogeneous horizontal resolution.
-
-  Parameters:
-	- ds: the data
-	- tserie: 'full'             -> full time series
-	-         'partial' (defalt) -> only ttt time records
-  '''
-
-  #-- parameters --
-  dxy = ds.dx_rho[1:-1, 1:-1].mean(dim=['eta_rho', 'xi_rho']).data
-  if 's_w' in ds.w.dims:
-    nbq=True
-  else:
-    nbq=False
-
-  #--
-  if tserie=='full':
-    nt=ds.dims['time']
-    ttt=np.arange(nt)
-  else:
-    nt=len(ttt)
-
-  ds_spectra={}
-  for it in range(nt):
-    da = xr.Dataset( )
-    da["uvel"] = (['z', 'y', 'x'], \
-                  0.5*(ds.u[it, :, 1:-1, :-1].data + ds.u[ttt[it], :, 1:-1, 1:].data) )
-    da["vvel"] = (['z', 'y', 'x'], \
-                  0.5*(ds.v[it, :, :-1, 1:-1].data + ds.v[ttt[it], :, 1:, 1:-1].data) )
-    if nbq:
-      da["wvel"] = (['z', 'y', 'x'], \
-                    0.5*(ds.w[it, :-1, 1:-1, 1:-1].data + ds.w[ttt[it], 1:, 1:-1, 1:-1].data) )
-    else:
-      da["wvel"] = (['z', 'y', 'x'],  ds.w[ttt[it], :, 1:-1, 1:-1].data )
-    #- compute dk -
-    u_dft = xrft.dft(da.uvel, \
-                 dim=['x', 'y', 'z'], true_phase=True, true_amplitude=False).compute()
-    dk = u_dft["freq_x"].spacing
-    #- compute spectra -
-    ufft = xrft.isotropic_power_spectrum(da.uvel, \
-           dim=['x', 'y'], true_phase=True, true_amplitude=False).compute()
-    vfft = xrft.isotropic_power_spectrum(da.vvel, \
-           dim=['x', 'y'], true_phase=True, true_amplitude=False).compute()
-    wfft = xrft.isotropic_power_spectrum(da.wvel, \
-           dim=['x', 'y'], true_phase=True, true_amplitude=False).compute()
-    ds_spectra[it] = 0.5*( (abs(ufft.data)**2 + abs(vfft.data)**2 + abs(wfft.data)**2) * dk**2 ).sum(axis=0) * dxy
-
-  return ds_spectra, ufft.freq_r

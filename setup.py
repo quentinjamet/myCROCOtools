@@ -8,5 +8,5 @@ setup(name='myCROCOtools',
       author_email='quentin.jamet@inria.fr',
       license='MIT',
       packages=['myCROCOtools'],
-      install_requires=['numpy', 'scipy', 'xarray' ],
+      install_requires=['numpy', 'scipy', 'xarray', 'xgcm'],
       zip_safe=False)
