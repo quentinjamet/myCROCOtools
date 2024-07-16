@@ -32,12 +32,12 @@ def mld(ds, strat=1.9620001275490499e-6):
   else:
       cpp = 'CPPS'
   #
-  coords={'x':{'center':'xi_rho',  'left':'xi_u'},
-          'y':{'center':'eta_rho', 'left':'eta_v'},
-          'z':{'center':'s_rho',   'outer':'s_w'}}
-  grid = Grid(ds,
-         coords=coords,
-         periodic=True)
+  coords_xy={'x':{'center':'xi_rho',  'left':'xi_u'},
+             'y':{'center':'eta_rho', 'left':'eta_v'}}
+  coords_z={'z':{'center':'s_rho',   'outer':'s_w'}}
+  grid_z = Grid(ds,
+         coords=coords_z,
+         periodic=False)
   #####################
 
   #-- constant --
@@ -45,13 +45,10 @@ def mld(ds, strat=1.9620001275490499e-6):
   rho0=1024
 
   #-- compute --
-  ds['N2_m']  = -g/rho0 * grid.diff(ds.rho.mean(dim=['xi_rho','eta_rho']), 'z') / ds.dz_w.mean(dim=['xi_rho','eta_rho'])
-  # correct for upper and lower values because xgcm assumed periodic boundary conditions
-  ds.N2_m[:,0]   = ds.N2_m[:, -1] = 0.0
-  #
+  ds['N2_m']  = -g/rho0 * grid_z.diff(ds.rho.mean(dim=['xi_rho','eta_rho']), 'z', boundary='extrapolate') / ds.dz_w.mean(dim=['xi_rho','eta_rho'])
 
-  mld  = np.zeros_like(ds.time)
-  kmld = np.zeros_like(ds.time)
+  mld  = xr.zeros_like(ds.time)
+  kmld = xr.zeros_like(ds.time)
   for iit in range(ds.dims['time']):
     print('-- Compute mld for time: ', iit, "/", ds.dims['time'], end="\r")
     # find peaks (à la Guillaume!) 
@@ -62,8 +59,8 @@ def mld(ds, strat=1.9620001275490499e-6):
     else:
       mld[iit]  = ds.z_w.mean(dim=['xi_rho','eta_rho'])[peaks[-1]]
  
-  ds['mld'] = mld
-  ds['kmld'] = kmld
+  ds["mld"]  = mld
+  ds["kmld"] = kmld
 
   ds = ds.drop_vars(["N2_m"])
 
@@ -73,30 +70,49 @@ def mld(ds, strat=1.9620001275490499e-6):
 #------------------
 # buoyancy fluxes
 #------------------
-def wb(ds, tracer='b', sbcs=None, tserie='last'):
+def wb(ds, tracer='b', sbcs=None, full=False):
   '''
-  Compute vertical fluxes for tracer 'tracer'
+  Compute vertical fluxes for tracer 'tracer', 
+  based on \Omega S-coordinate vertical momentum component.
 
   Parameters:
         - ds: the data 
         - tracer: 'T' temperature
                   'S' salinity (to be coded)
                   'b' (default), buoyancy (requires an EOS ; only linear, temperature driven coded for now (10/11/2023))
-	- sbcs: surface net heat flux [W/m^2]. Atm convention, +=up.
-	- tserie: 'full'           -> full time series
-	-         'last' (default) -> only last time record
+	- sbcs: surface net tracer flux. Atm convention, +=up. 
+	        For now specify only heat flux in [W/m^2], 
+	        buoyancy flux are recomputed accordingly.
+        - full: outpt 3D vertical fluxes, otherwise compute hz averaging (default=False)
 
   Output:
-	- wb, computed at cell interface (omega points) for both
-          nbq AND hydrostatic simulations. 
-          For the latter, wb is first computed at rho-point and then interpolated.
-          Surface boundary condition is specified through sbcs.
+	- resolved and sub-grid-scale vertical fluxes of tracer 'tracer'
+	  Computed at cell interface (omega points).
+          Surface boundary condition is specified through sbcs
+	  and applied to sub-grid-scale fluxes.
 
   Comments:
-        - reference density, temperature (and salinity) are recomputed 
-          as the basin averaged quantities.
-	- compressible_NS_paper.ipynb for implementation with xgcm
+        - reference density is recomputed as the basin averaged quantities at initial step,
+          following RESET_RHO0 CPP option in croco to minimize Boussinesq errors.
   '''
+
+  #####################
+  #- define xgcm grid -
+  if 'CPP-options' in ds.attrs:
+    cpp = 'CPP-options'
+  else:
+    cpp = 'CPPS'
+  #
+  coords_xy={'x':{'center':'xi_rho',  'left':'xi_u'},
+        'y':{'center':'eta_rho', 'left':'eta_v'}}
+  coords_z={'z':{'center':'s_rho',   'outer':'s_w'}}
+  grid_xy = Grid(ds,
+       coords=coords_xy,
+       periodic=True)
+  grid_z = Grid(ds,
+       coords=coords_z,
+       periodic=False)
+  #####################
 
   #-- constant --
   alphaT = 2.e-4              # [K^{-1}]-- from croco.in
@@ -108,6 +124,7 @@ def wb(ds, tracer='b', sbcs=None, tserie='last'):
   #--
   if tracer == 'b':
     print('-- compute BUOYANCY vertical flux --')
+    print('-- based on linear, temperature driven EOS --')
     if sbcs != None:
       wb0 = (g*alphaT*sbcs)/(rho0*Cp)
     else:
@@ -115,51 +132,42 @@ def wb(ds, tracer='b', sbcs=None, tserie='last'):
     bbb = -(ds.rho+1000 - rho0)*g / rho0
   elif tracer == 'T':
     print('-- compute TEMPERATURE vertical flux --')
-    T0 = (ds.temp[0, ...]*ds.dx_rho*ds.dy_rho*ds.dz_rho).sum() \
-        /(ds.dx_rho*ds.dy_rho*ds.dz_rho).sum()
     if sbcs != None:
       wb0 = sbcs/(rho0*Cp)
     else:
       wb0 = 0.0
-    bbb = ds.temp-T0
+    bbb = ds.temp
   elif tracer == 'S':
     print('-- compute SALINITY vertical flux --')
     sys.exit("-->> TO BE DONE <<--")
   else:
     sys.exit("==>> expected: b, T, S ; provided: %s" % tracer)
- 
-  #--
-  if tserie=='full':
-    nt=ds.dims['time']
-    ttt=np.arange(nt)
-  #
-  if ds.attrs['CPP-options'].find('NBQ')!= -1:
-    nbq=True
-  else:
-    nbq=False
+  
+  #-- resolved vertical fluxes --
+  print('-->> Resolved fluxes')
+  wb = ds.omega * grid_z.interp(bbb, 'z', boundary='extrapolate')
+  # set surface boundary condition to zero 
+  wb[:, -1, ...]=0.0
 
-  #--
-  if nbq:
-    if tserie=='last':
-      wb  = xr.zeros_like(ds.w[-1, ...])
-      wb[-1, ...]   = wb0
-      wb[1:-1, ...] = ds.w[-1, 1:-1, ...] * \
-                      0.5*(bbb[-1, 1:, ...].data+bbb[-1, :-1, ...].data)
-    else:
-      wb  = xr.zeros_like(ds.w)
-      wb[:, -1, ...]   = wb0
-      wb[:, 1:-1, ...] = ds.w[:, 1:-1, ...] * \
-                         0.5*(bbb[:, 1:, ...].data+bbb[:, :-1, ...].data)
+  #-- sgs vertical fluxes (if available) --
+  if 'AKt' in ds.keys():
+    print('-->> Sub-grid scale fluxes based on AKt in ds ; apply boundary conditions given by sbcs')
+    wb_sgs = -ds.AKt * grid_z.diff(bbb, 'z', boundary='extrapolate')/ds.dz_w
+    # adjust surface boundary condition (Qnet)
+    wb_sgs[:, 0, ...] = 0.
+    wb_sgs[:, -1, ...] = wb0
   else:
-    if tserie=='last':
-      tmp = ds.w[-1, ...]*bbb[-1, ...]
-      wb  = xr.zeros_like(ds.omega[-1, ...])
-      wb[-1, ...] = wb0
-      wb[1:-1, ...] = 0.5*(tmp[1:, ...].data+tmp[:-1, ...].data)
-    else:
-      tmp = ds.w*bbb
-      wb  = xr.zeros_like(ds.omega)
-      wb[:, -1, ...] = wb0
-      wb[:, 1:-1, ...] = 0.5*(tmp[:, 1:, ...].data+tmp[:, :-1, ...].data)
+    print('-->> Cannot compute sub-grid scale fluxes, I need estimates of AKt in ds <<--')
+    wb_sgs = xr.zeros_like(wb) 
 
-  return wb
+  #-- horizontal averaging --
+  name1=str("w%s" % tracer)
+  name2=str("w%s_sgs" % tracer)
+  if full:
+    ds[name1] = wb
+    ds[name2] = wb_sgs
+  else:
+    ds[name1] = wb.mean(dim=['eta_rho','xi_rho'])
+    ds[name2] = wb_sgs.mean(dim=['eta_rho','xi_rho'])
+
+  return ds

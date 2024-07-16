@@ -60,8 +60,11 @@ def grid_z(ds, tvar=False):
 		(default=False)
   '''
 
-  zzt = ds.hc * ds.sc_r + ds.Cs_r*ds.h
-  zzw = ds.hc * ds.sc_w + ds.Cs_w*ds.h
+  if 'Cs_rho' in ds:
+    zzt = ds.hc * ds.s_rho + ds.Cs_rho*ds.h
+  else:
+    zzt = ds.hc * ds.s_rho + ds.Cs_r*ds.h
+  zzw = ds.hc * ds.s_w + ds.Cs_w*ds.h
   if tvar:
     print('-- Compute time variable vertical mesh --')
     z_rho = (1.0 *(ds.zeta*(1+zzt) + ds.h*zzt)/(ds.h+ds.hc)).transpose('time', 's_rho', 'eta_rho', 'xi_rho')
@@ -118,41 +121,47 @@ def grid_hz(ds, vertical=False):
       cpp = 'CPP-options'
   else:
       cpp = 'CPPS'
-  #
+  # Horizontal grid
   if ds.attrs[cpp].find('EW_PERIODIC')!= -1 and ds.attrs[cpp].find('NS_PERIODIC')!= -1:
-    coords={'x':{'center':'xi_rho',  'left':'xi_u'}, 
-            'y':{'center':'eta_rho', 'left':'eta_v'}, 
-            'z':{'center':'s_rho',   'outer':'s_w'}}
+    coords_xy={'x':{'center':'xi_rho',  'left':'xi_u'}, 
+               'y':{'center':'eta_rho', 'left':'eta_v'}}
+#               'z':{'center':'s_rho',   'outer':'s_w'}}
     ds = ds.drop_sel(xi_rho=ds.xi_rho[0]).drop_sel(xi_rho=ds.xi_rho[-1]).drop_sel(eta_rho=ds.eta_rho[0]).drop_sel(eta_rho=ds.eta_rho[-1]).drop_sel(xi_u=ds.xi_u[-1]).drop_sel(eta_v=ds.eta_v[-1])
-    grid = Grid(ds,
-            coords=coords,
+    grid_xy = Grid(ds,
+            coords=coords_xy,
             periodic=True)
     print('WARNING: In doubly periodic conditions, the 2 (1) additional rho- (u-, v-) grid points in CROCO')
     print('         are removed since xgcm handles boundary conditions accuratly in this case.')
   else:
-    coords={'x':{'center':'xi_rho',  'inner':'xi_u'}, 
-            'y':{'center':'eta_rho', 'inner':'eta_v'}, 
-            'z':{'center':'s_rho',   'outer':'s_w'}}
-    grid = Grid(ds, 
-            coords=coords,
+    coords_xy={'x':{'center':'xi_rho',  'inner':'xi_u'}, 
+               'y':{'center':'eta_rho', 'inner':'eta_v'}}
+#            'z':{'center':'s_rho',   'outer':'s_w'}}
+    grid_xy = Grid(ds, 
+            coords=coords_xy,
             boundary='extend')
+  # vertical grid
+  coords_z={'z':{'center':'s_rho',   'outer':'s_w'}}
+  grid_z = Grid(ds,
+            coords=coords_z,
+            boundary='extrapolate')
+
   #####################
   
   
   if 'SPHERICAL' in ds.attrs[cpp]:
       print('- Computes lon/lat at u,v and psi points, and assign to the dataset as coordinates')
-      ds['lon_u'] = grid.interp(ds.lon_rho,'x')
-      ds['lat_u'] = grid.interp(ds.lat_rho,'x')
-      ds['lon_v'] = grid.interp(ds.lon_rho,'y')
-      ds['lat_v'] = grid.interp(ds.lat_rho,'y')
-      ds['lon_psi'] = grid.interp(ds.lon_v,'x')
-      ds['lat_psi'] = grid.interp(ds.lat_u,'y')
+      ds['lon_u'] = grid_xy.interp(ds.lon_rho,'x')
+      ds['lat_u'] = grid_xy.interp(ds.lat_rho,'x')
+      ds['lon_v'] = grid_xy.interp(ds.lon_rho,'y')
+      ds['lat_v'] = grid_xy.interp(ds.lat_rho,'y')
+      ds['lon_psi'] = grid_xy.interp(ds.lon_v,'x')
+      ds['lat_psi'] = grid_xy.interp(ds.lat_u,'y')
       _coords = ['lon_u','lat_u','lon_v','lat_v','lon_psi','lat_psi']
       ds = ds.set_coords(_coords)
       
   if vertical:
-      ds['z_u'] = grid.interp(ds.z_rho,'x')
-      ds['z_v'] = grid.interp(ds.z_rho,'y')
+      ds['z_u'] = grid_xy.interp(ds.z_rho,'x')
+      ds['z_v'] = grid_xy.interp(ds.z_rho,'y')
       _coords = ['z_u','z_v']
       ds = ds.set_coords(_coords)
 
@@ -161,18 +170,18 @@ def grid_hz(ds, vertical=False):
   if 'pm' in ds and 'pn' in ds:
       ds['dx_rho'] = 1/ds['pm']
       ds['dy_rho'] = 1/ds['pn']
-      ds['dx_u'] = grid.interp(1/ds['pm'],'x')
-      ds['dy_u'] = grid.interp(1/ds['pn'],'x')
-      ds['dx_v'] = grid.interp(1/ds['pm'],'y')
-      ds['dy_v'] = grid.interp(1/ds['pn'],'y')
-      ds['dx_psi'] = grid.interp(grid.interp(1/ds['pm'], 'y'),  'x') 
-      ds['dy_psi'] = grid.interp(grid.interp(1/ds['pn'], 'y'),  'x')
+      ds['dx_u'] = grid_xy.interp(1/ds['pm'],'x')
+      ds['dy_u'] = grid_xy.interp(1/ds['pn'],'x')
+      ds['dx_v'] = grid_xy.interp(1/ds['pm'],'y')
+      ds['dy_v'] = grid_xy.interp(1/ds['pn'],'y')
+      ds['dx_psi'] = grid_xy.interp(grid_xy.interp(1/ds['pm'], 'y'),  'x') 
+      ds['dy_psi'] = grid_xy.interp(grid_xy.interp(1/ds['pn'], 'y'),  'x')
       
   try:
-      ds['mask_psi'] = grid.interp(grid.interp(ds.mask_rho, 'y'),  'x') 
+      ds['mask_psi'] = grid_xy.interp(grid_xy.interp(ds.mask_rho, 'y'),  'x') 
   except:
       ds['mask_rho'] = ds['pm']*0.+1.
-      ds['mask_psi'] = grid.interp(grid.interp(ds.mask_rho, 'y'),  'x') 
+      ds['mask_psi'] = grid_xy.interp(grid_xy.interp(ds.mask_rho, 'y'),  'x') 
 
 
   '''ds.coords['z_rho'][np.isnan(ds.mask_rho)] = 0.
@@ -182,11 +191,13 @@ def grid_hz(ds, vertical=False):
   
   if vertical:
       print('- add vertical metrics for u, v, rho and psi points') 
-      ds['dz_rho'] = grid.diff(ds.z_w,'z')
-      ds['dz_w']   = grid.diff(ds.z_rho,'z')
-      ds['dz_u']   = grid.interp(ds.dz_rho,'x')
-      ds['dz_v']   = grid.interp(ds.dz_rho,'y')
-      ds['dz_psi'] = grid.interp(ds.dz_v,'x')
+      #ds['dz_rho'] = grid.diff(ds.z_w,'z')
+      #ds['dz_w']   = grid.diff(ds.z_rho,'z')
+      #ds.ds_w[-1, ...] = (ds.z_rho[-1, ...]-ds.z_rho[-2, ...].data)/2
+      #dz_w[0, ...]     = (ds.z_rho[1, ...] -ds.z_rho[0, ...].data)/2
+      ds['dz_u']   = grid_xy.interp(ds.dz_rho,'x')
+      ds['dz_v']   = grid_xy.interp(ds.dz_rho,'y')
+      ds['dz_psi'] = grid_xy.interp(ds.dz_v,'x')
       
 
   # add areas metrics for rho,u,v and psi points
@@ -201,32 +212,49 @@ def grid_hz(ds, vertical=False):
   ds['rAv']   = ds.dx_v   * ds.dy_v     
   ds['rApsi'] = ds.dx_psi * ds.dy_psi
 
-  if vertical:
-      metrics = {
+
+#  if vertical:
+#      metrics = {
+#             ('x',): ['dx_rho', 'dx_u', 'dx_v', 'dx_psi'], # X distances
+#             ('y',): ['dy_rho', 'dy_u', 'dy_v', 'dy_psi'], # Y distances
+#             ('z',): ['dz_rho', 'dz_u', 'dz_v', 'dz_psi', 'dz_w'], # Z distances
+#             ('x', 'y'): ['rArho', 'rAu', 'rAv', 'rApsi'] # Areas
+#            }
+#  else:
+#      metrics = {
+#             ('x',): ['dx_rho', 'dx_u', 'dx_v', 'dx_psi'], # X distances
+#             ('y',): ['dy_rho', 'dy_u', 'dy_v', 'dy_psi'], # Y distances
+#             ('x', 'y'): ['rArho', 'rAu', 'rAv', 'rApsi'] # Areas
+#            }
+  metrics_xy = {
              ('x',): ['dx_rho', 'dx_u', 'dx_v', 'dx_psi'], # X distances
              ('y',): ['dy_rho', 'dy_u', 'dy_v', 'dy_psi'], # Y distances
-             ('z',): ['dz_rho', 'dz_u', 'dz_v', 'dz_psi', 'dz_w'], # Z distances
              ('x', 'y'): ['rArho', 'rAu', 'rAv', 'rApsi'] # Areas
             }
-  else:
-       metrics = {
-             ('x',): ['dx_rho', 'dx_u', 'dx_v', 'dx_psi'], # X distances
-             ('y',): ['dy_rho', 'dy_u', 'dy_v', 'dy_psi'], # Y distances
-             ('x', 'y'): ['rArho', 'rAu', 'rAv', 'rApsi'] # Areas
+
+  if vertical:
+      metrics_z = {
+             ('z',): ['dz_rho', 'dz_u', 'dz_v', 'dz_psi', 'dz_w'] # Z distances
             }
 
 
   if ds.attrs[cpp].find('EW_PERIODIC')!= -1 and ds.attrs[cpp].find('NS_PERIODIC')!= -1:
-    ds.attrs['xgcm-Grid'] = Grid(ds, 
-            coords=coords,
-            metrics = metrics,
+    ds.attrs['xgcm-Grid_xy'] = Grid(ds, 
+            coords=coords_xy,
+            metrics = metrics_xy,
             periodic=True)
   else:
-    ds.attrs['xgcm-Grid'] = Grid(ds, 
-            coords=coords,
-            metrics = metrics,
-            periodic=False,
+    ds.attrs['xgcm-Grid_xy'] = Grid(ds, 
+            coords=coords_xy,
+            metrics = metrics_xy,
             boundary='extend')
+  #
+  if vertical:
+    ds.attrs['xgcm-Grid_z'] = Grid(ds,
+            coords=coords_z,
+            metrics = metrics_z,
+            boundary='extrapolate')
+
 
   return ds
 
