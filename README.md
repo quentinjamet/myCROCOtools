@@ -1,11 +1,10 @@
 
-#+TITLE: myCROCOtools
+# myCROCOtools
 Provide couple of functions I use to analyze croco outputs
 
-* Installation
+# Installation
 
-#+begin_src bash
+```
 python setup.py install --user
-#+end_src
-
+```
 
