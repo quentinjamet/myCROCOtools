@@ -140,12 +140,31 @@ def grid_hz(ds, vertical=False):
             coords=coords_xy,
             boundary='extend')
   # vertical grid
-  coords_z={'z':{'center':'s_rho',   'outer':'s_w'}}
-  grid_z = Grid(ds,
-            coords=coords_z,
-            boundary='extrapolate')
+  if not 's_rho' in ds.dims or not 's_w' in ds.dims:
+    print("Data array is 2D")
+    threeD=False
+  else:
+    print("Data array is 3D")
+    threeD=True
+  if threeD:
+    coords_z={'z':{'center':'s_rho',   'outer':'s_w'}}
+    grid_z = Grid(ds,
+              coords=coords_z,
+              boundary='extrapolate')
 
   #####################
+
+  # add horizontal distance metrics for (centered at!) rho, u, v and psi point
+  if 'pm' in ds and 'pn' in ds:
+      print("-- Add dx/dy --")
+      ds['dx_rho'] = 1/ds['pm']
+      ds['dy_rho'] = 1/ds['pn']
+      ds['dx_u'] = grid_xy.interp(1/ds['pm'],'x')
+      ds['dy_u'] = grid_xy.interp(1/ds['pn'],'x')
+      ds['dx_v'] = grid_xy.interp(1/ds['pm'],'y')
+      ds['dy_v'] = grid_xy.interp(1/ds['pn'],'y')
+      ds['dx_psi'] = grid_xy.interp(grid_xy.interp(1/ds['pm'], 'y'),  'x') 
+      ds['dy_psi'] = grid_xy.interp(grid_xy.interp(1/ds['pn'], 'y'),  'x')
   
   
   if 'SPHERICAL' in ds.attrs[cpp]:
@@ -159,29 +178,18 @@ def grid_hz(ds, vertical=False):
       _coords = ['lon_u','lat_u','lon_v','lat_v','lon_psi','lat_psi']
       ds = ds.set_coords(_coords)
       
-  if vertical:
+  if vertical and threeD:
       ds['z_u'] = grid_xy.interp(ds.z_rho,'x')
       ds['z_v'] = grid_xy.interp(ds.z_rho,'y')
       _coords = ['z_u','z_v']
       ds = ds.set_coords(_coords)
 
 
-  # add horizontal distance metrics for (centered at!) rho, u, v and psi point
-  if 'pm' in ds and 'pn' in ds:
-      ds['dx_rho'] = 1/ds['pm']
-      ds['dy_rho'] = 1/ds['pn']
-      ds['dx_u'] = grid_xy.interp(1/ds['pm'],'x')
-      ds['dy_u'] = grid_xy.interp(1/ds['pn'],'x')
-      ds['dx_v'] = grid_xy.interp(1/ds['pm'],'y')
-      ds['dy_v'] = grid_xy.interp(1/ds['pn'],'y')
-      ds['dx_psi'] = grid_xy.interp(grid_xy.interp(1/ds['pm'], 'y'),  'x') 
-      ds['dy_psi'] = grid_xy.interp(grid_xy.interp(1/ds['pn'], 'y'),  'x')
-      
-  try:
-      ds['mask_psi'] = grid_xy.interp(grid_xy.interp(ds.mask_rho, 'y'),  'x') 
-  except:
-      ds['mask_rho'] = ds['pm']*0.+1.
-      ds['mask_psi'] = grid_xy.interp(grid_xy.interp(ds.mask_rho, 'y'),  'x') 
+#  try:
+#      ds['mask_psi'] = grid_xy.interp(grid_xy.interp(ds.mask_rho, 'y'),  'x') 
+#  except:
+#      ds['mask_rho'] = ds['pm']*0.+1.
+#      ds['mask_psi'] = grid_xy.interp(grid_xy.interp(ds.mask_rho, 'y'),  'x') 
 
 
   '''ds.coords['z_rho'][np.isnan(ds.mask_rho)] = 0.
@@ -189,7 +197,7 @@ def grid_hz(ds, vertical=False):
   ds.coords['z_rho'][ds.mask_rho==0] = 0.
   ds.coords['z_w'][ds.mask_rho==0] = 0.'''
   
-  if vertical:
+  if vertical and threeD:
       print('- add vertical metrics for u, v, rho and psi points') 
       #ds['dz_rho'] = grid.diff(ds.z_w,'z')
       #ds['dz_w']   = grid.diff(ds.z_rho,'z')
@@ -201,16 +209,18 @@ def grid_hz(ds, vertical=False):
       
 
   # add areas metrics for rho,u,v and psi points
-  #?? should this not be :
-  #ds['rArho'] = ds.dx_psi * ds.dy_psi
-  #ds['rAu']   = ds.dx_v   * ds.dy_v     
-  #ds['rAv']   = ds.dx_u   * ds.dy_u     
-  #ds['rApsi'] = ds.dx_rho * ds.dy_rho
-  #should this rather be ??
-  ds['rArho'] = ds.dx_rho * ds.dy_rho
-  ds['rAu']   = ds.dx_u   * ds.dy_u     
-  ds['rAv']   = ds.dx_v   * ds.dy_v     
-  ds['rApsi'] = ds.dx_psi * ds.dy_psi
+  if 'pm' in ds and 'pn' in ds:
+    print("-- Add rA --")
+    #?? should this not be :
+    #ds['rArho'] = ds.dx_psi * ds.dy_psi
+    #ds['rAu']   = ds.dx_v   * ds.dy_v     
+    #ds['rAv']   = ds.dx_u   * ds.dy_u     
+    #ds['rApsi'] = ds.dx_rho * ds.dy_rho
+    #should this rather be ??
+    ds['rArho'] = ds.dx_rho * ds.dy_rho
+    ds['rAu']   = ds.dx_u   * ds.dy_u     
+    ds['rAv']   = ds.dx_v   * ds.dy_v     
+    ds['rApsi'] = ds.dx_psi * ds.dy_psi
 
 
 #  if vertical:
@@ -232,7 +242,7 @@ def grid_hz(ds, vertical=False):
              ('x', 'y'): ['rArho', 'rAu', 'rAv', 'rApsi'] # Areas
             }
 
-  if vertical:
+  if vertical and threeD:
       metrics_z = {
              ('z',): ['dz_rho', 'dz_u', 'dz_v', 'dz_psi', 'dz_w'] # Z distances
             }
@@ -249,7 +259,7 @@ def grid_hz(ds, vertical=False):
             metrics = metrics_xy,
             boundary='extend')
   #
-  if vertical:
+  if vertical and threeD:
     ds.attrs['xgcm-Grid_z'] = Grid(ds,
             coords=coords_z,
             metrics = metrics_z,
