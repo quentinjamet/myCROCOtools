@@ -25,29 +25,50 @@ def generate_dir_list(dir_in, start_date, end_date):
     #-- The end! --
     return months
 
+
 ################################
-def creat_dataset(depth, lat, lon, nmem, nt, attrs_his):
+def create_dataset(depth, lat, lon, attrs_his, nmem=0, nt=1):
 
     #-- get dimensions and mesh --
     [nz, ny, nx] = [len(depth), len(lat), len(lon)]
     [e2t, e1t]   = [lat[1]-lat[0], lon[0]-lon[1]]
+    ens=False
+    if nmem>0: ens=True
     
+    if ens:
+        variables=dict(
+                zos=(["number", "time", "latitude", "longitude"], np.zeros([nmem, nt, ny, nx])),
+                uo=(["number", "time", "depth", "latitude", "longitude"], np.zeros([nmem, nt, nz, ny, nx])),
+                vo=(["number", "time", "depth", "latitude", "longitude"], np.zeros([nmem, nt, nz, ny, nx])),
+                thetao=(["number", "time", "depth", "latitude", "longitude"], np.zeros([nmem, nt, nz, ny, nx])),
+                so=(["number", "time", "depth", "latitude", "longitude"], np.zeros([nmem, nt, nz, ny, nx])),
+            )
+        coordinates=dict(
+             number=np.arange(nmem).astype('int16'),
+             time=np.zeros(nt).astype('float'),
+             depth=depth.astype('float'),
+             longitude=lon.astype('float'),
+             latitude=lat.astype('float'),
+         )
+    else:
+        variables=dict(
+                zos=(["time", "latitude", "longitude"], np.zeros([nt, ny, nx])),
+                uo=(["time", "depth", "latitude", "longitude"], np.zeros([nt, nz, ny, nx])),
+                vo=(["time", "depth", "latitude", "longitude"], np.zeros([nt, nz, ny, nx])),
+                thetao=(["time", "depth", "latitude", "longitude"], np.zeros([nt, nz, ny, nx])),
+                so=(["time", "depth", "latitude", "longitude"], np.zeros([nt, nz, ny, nx])),
+            )
+        coordinates=dict(
+             time=np.zeros(nt).astype('float'),
+             depth=depth.astype('float'),
+             longitude=lon.astype('float'),
+             latitude=lat.astype('float'),
+         )
+
     #-- create dataset --
     ds = xr.Dataset(
-        data_vars=dict(
-            zos=(["number", "time", "latitude", "longitude"], np.zeros([nmem, nt, ny, nx])),
-            uo=(["number", "time", "depth", "latitude", "longitude"], np.zeros([nmem, nt, nz, ny, nx])),
-            vo=(["number", "time", "depth", "latitude", "longitude"], np.zeros([nmem, nt, nz, ny, nx])),
-            thetao=(["number", "time", "depth", "latitude", "longitude"], np.zeros([nmem, nt, nz, ny, nx])),
-            so=(["number", "time", "depth", "latitude", "longitude"], np.zeros([nmem, nt, nz, ny, nx])),
-        ),
-        coords=dict(
-            number=np.arange(nmem).astype('int16'),
-            time=np.zeros(nt).astype('float'),
-            depth=depth.astype('float'),
-            longitude=lon.astype('float'),
-            latitude=lat.astype('float'),
-        ),
+        data_vars=variables,
+        coords=coordinates,
         attrs=dict(title='Hourly mean fields from Ensemble Global Ocean Physics Analysis ',
                    comments='Retrieve from Mercator Ocean International ftp',
                    history=[attrs_his, \
@@ -61,9 +82,10 @@ def creat_dataset(depth, lat, lon, nmem, nt, attrs_his):
     )
     
     # variables attributes
-    ds.number.attrs      = {'long_name': 'ensemble member numerical id',
-                        'units': '1',
-                        'standard_name': 'realization'}
+    if ens:
+        ds.number.attrs      = {'long_name': 'ensemble member numerical id',
+                            'units': '1',
+                            'standard_name': 'realization'}
     ds.depth.attrs       = {'axis': 'Z',
                          'long_name': 'Depth',
                          'positive': 'down',
@@ -117,7 +139,7 @@ def creat_dataset(depth, lat, lon, nmem, nt, attrs_his):
     return ds
 
 ################################
-def convert_ens025(dir_in, dates=None, mydata=None, varList=None, fileOUT=None):
+def convert_ens025(dir_in, dates=None, varList=None, fileOUT=None, ens=False):
     '''
     Reorganize ORCA025 ensemble simulation from Mercator Ocean following CMEMS convention.
     Data have been retrieved on the native NEMO grid, with one file per 3D variables (SSH is in a file with other 2D variables (e.g. air-sea fluxes)),
@@ -151,6 +173,8 @@ def convert_ens025(dir_in, dates=None, mydata=None, varList=None, fileOUT=None):
                                 "x_v": "",
                                 "y_v": "",
                                 "z_v": "",})
+	- ens: If True, create one output file containing all ensemble members.
+               If False (default), create one output file per ensemble member.
     '''
     
     #-- check the type of data and associated list of variables --
@@ -192,7 +216,7 @@ def convert_ens025(dir_in, dates=None, mydata=None, varList=None, fileOUT=None):
     #-- construct assiated land/ocean mask --
     print("-- Generate 3D land/ocean mask on regular grid --")
     msk = xr.where(tmp.thetao.isel(time_counter=0) > 0, 1., 0.)
-    msk = msk.stack(yx=("y", "x"))
+    msk = eval("msk.stack(yx=('%s', '%s'))" % (varList['y'], varList['x']) )
     msk_reg = np.zeros([nz, ny, nx])
     for kkk in range(nz):
         msk_reg[kkk, ...] = griddata((msk.nav_lon, msk.nav_lat), msk[kkk, :], \
@@ -212,7 +236,7 @@ def convert_ens025(dir_in, dates=None, mydata=None, varList=None, fileOUT=None):
         nmem = len(glob.glob("%s/mem*" % idir))
         
         #- initiate xarray dataset -
-        ds = creat_dataset(depth, latitude, longitude, nmem, 1, attrs_his)
+        if ens: ds = create_dataset(depth, latitude, longitude, attrs_his, nmem=nmem, nt=1)
     
         #----------------------------
         # Interpolate on regular grid
@@ -228,6 +252,7 @@ def convert_ens025(dir_in, dates=None, mydata=None, varList=None, fileOUT=None):
             
             for imem in range(nmem):
                 print("== member %03.i ==" % (imem) )
+                if not ens: ds = create_dataset(depth, latitude, longitude, attrs_his, nmem=0, nt=1)
                 
                 #-- zos --
                 #print("    - zos")
@@ -235,8 +260,12 @@ def convert_ens025(dir_in, dates=None, mydata=None, varList=None, fileOUT=None):
                 tmpda = eval("xr.open_mfdataset('%s/mem%03.i/*%s*%s').%s" % \
                              (idir, imem, varList['zos'], ext, varList['zos']) )
                 # extract time info
-                if imem == 0: 
-                    ds["time"] = eval("tmpda.%s.data.astype('float')" % (varList['time']) )
+                if ens:
+                    if imem == 0: 
+                        ds["time"] = eval("tmpda.%s.data" % (varList['time']) )
+                        ds.time.attrs = dict(time_origin=eval("tmpda.%s.attrs['time_origin']" % varList['time']))
+                else:
+                    ds["time"] = eval("tmpda.%s.data" % (varList['time']) )
                     ds.time.attrs = dict(time_origin=eval("tmpda.%s.attrs['time_origin']" % varList['time']))
                 # prepare for interpoaltion (remove time dimension, stack on the hz, remove NaNs)
                 tmpda = eval("tmpda.isel(%s=0).stack(yx=('%s', '%s')).dropna(dim='yx', how='any')" % \
@@ -245,7 +274,10 @@ def convert_ens025(dir_in, dates=None, mydata=None, varList=None, fileOUT=None):
                 tmpvar = eval("griddata((tmpda.%s, tmpda.%s), tmpda, (longitude[None, :], latitude[:, None]), method='linear')" % \
                               (varList['longitude'], varList['latitude']))
                 # apply mask and write into the new dataset
-                ds["zos"][imem, 0, ...] = (tmpvar * msk_reg[0, ...])
+                if ens:
+                    ds["zos"][imem, 0, ...] = (tmpvar * msk_reg[0, ...])
+                else:
+                    ds["zos"][0, ...]       = (tmpvar * msk_reg[0, ...])
                 
                 #-- thetao --
                 #print("    - thetao")
@@ -254,8 +286,11 @@ def convert_ens025(dir_in, dates=None, mydata=None, varList=None, fileOUT=None):
                                 ( idir, imem, varList['thetao'], ext, varList['thetao'], \
                                   varList['time'], varList['z'], varList['y'], varList['x']) )
                     if tmpda.size != 0:
-                        tmpvar = eval("griddata((tmpda.%s, tmpda.%s), tmpda, (longitude[None, :], latitude[:, None]), method='linear')" % (varList['longitude'], varList['latitude']) ) 
-                        ds["thetao"][imem, 0, kkk,  ...] = (tmpvar * msk_reg[kkk, ...])
+                        tmpvar = eval("griddata((tmpda.%s, tmpda.%s), tmpda, (longitude[None, :], latitude[:, None]), method='linear')" % (varList['longitude'], varList['latitude']) )
+                        if ens: 
+                            ds["thetao"][imem, 0, kkk,  ...] = (tmpvar * msk_reg[kkk, ...])
+                        else:
+                            ds["thetao"][0, kkk,  ...]       = (tmpvar * msk_reg[kkk, ...])
                     else:
                         break
                         
@@ -267,7 +302,10 @@ def convert_ens025(dir_in, dates=None, mydata=None, varList=None, fileOUT=None):
                                   varList['time'], varList['z'], varList['y'], varList['x']) )
                     if tmpda.size != 0:
                         tmpvar = eval("griddata((tmpda.%s, tmpda.%s), tmpda, (longitude[None, :], latitude[:, None]), method='linear')" % (varList['longitude'], varList['latitude']) ) 
-                        ds["so"][imem, 0, kkk,  ...] = (tmpvar * msk_reg[kkk, ...])
+                        if ens:
+                            ds["so"][imem, 0, kkk,  ...] = (tmpvar * msk_reg[kkk, ...])
+                        else:
+                            ds["so"][0, kkk,  ...]       = (tmpvar * msk_reg[kkk, ...])
                     else:
                         break
                         
@@ -278,8 +316,11 @@ def convert_ens025(dir_in, dates=None, mydata=None, varList=None, fileOUT=None):
                                 ( idir, imem, varList['uo'], ext, varList['uo'], \
                                   varList['time'], varList['z_u'], varList['y_u'], varList['x_u']) )
                     if tmpda.size != 0:
-                        tmpvar = eval("griddata((tmpda.%s, tmpda.%s), tmpda, (longitude[None, :], latitude[:, None]), method='linear')" % (varList['longitude'], varList['latitude']) ) 
-                        ds["uo"][imem, 0, kkk,  ...] = (tmpvar * msk_reg[kkk, ...])
+                        tmpvar = eval("griddata((tmpda.%s, tmpda.%s), tmpda, (longitude[None, :], latitude[:, None]), method='linear')" % (varList['longitude'], varList['latitude']) )
+                        if ens: 
+                            ds["uo"][imem, 0, kkk,  ...] = (tmpvar * msk_reg[kkk, ...])
+                        else:
+                            ds["uo"][0, kkk,  ...]       = (tmpvar * msk_reg[kkk, ...])
                     else:
                         break
                         
@@ -290,16 +331,29 @@ def convert_ens025(dir_in, dates=None, mydata=None, varList=None, fileOUT=None):
                                 ( idir, imem, varList['vo'], ext, varList['vo'], \
                                   varList['time'], varList['z_v'], varList['y_v'], varList['x_v']) )
                     if tmpda.size != 0:
-                        tmpvar = eval("griddata((tmpda.%s, tmpda.%s), tmpda, (longitude[None, :], latitude[:, None]), method='linear')" % (varList['longitude'], varList['latitude']) ) 
-                        ds["vo"][imem, 0, kkk,  ...] = (tmpvar * msk_reg[kkk, ...])
+                        tmpvar = eval("griddata((tmpda.%s, tmpda.%s), tmpda, (longitude[None, :], latitude[:, None]), method='linear')" % (varList['longitude'], varList['latitude']) )
+                        if ens: 
+                            ds["vo"][imem, 0, kkk,  ...] = (tmpvar * msk_reg[kkk, ...])
+                        else:
+                            ds["vo"][0, kkk,  ...]       = (tmpvar * msk_reg[kkk, ...])
                     else:
                         break
+
+                if not ens:
+                    #-- write to netcdf --
+                    print("(%s) -- write to netcdf: %s/mem%03.i/%03.i%s_%s" % \
+                          (datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'), idir, imem, imem, fileOUT, ext))
+                    #print(str('%s/ens025-reana-daily_%s' % (idir, ext) ))
+                    ds.to_netcdf(path=str('%s/mem%03.i/%03.i%s_%s' % \
+                                          (idir, imem, imem, fileOUT, ext) ), engine='netcdf4', compute=False)
+                
         
-            #-- write to netcdf --
-            print("(%s) -- write to netcdf: %s/%s_%s" % \
-                  (datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'), idir, fileOUT, ext))
-            #print(str('%s/ens025-reana-daily_%s' % (idir, ext) ))
-            ds.to_netcdf(path=str('%s/%s_%s' % (idir, fileOUT, ext) ), engine='netcdf4', compute=False)
+            if ens:
+                #-- write to netcdf --
+                print("(%s) -- write to netcdf: %s/%s_%s" % \
+                      (datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'), idir, fileOUT, ext))
+                #print(str('%s/ens025-reana-daily_%s' % (idir, ext) ))
+                ds.to_netcdf(path=str('%s/%s_%s' % (idir, fileOUT, ext) ), engine='netcdf4', compute=False)
             
     #-- The end! --
-    return ds
+    return

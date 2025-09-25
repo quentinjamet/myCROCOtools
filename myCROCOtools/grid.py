@@ -47,6 +47,28 @@ from   xgcm     import Grid
 #  return grid
 
 
+def add_metrics(ds1, ds2, listMetr):
+    '''
+    Add listMetr variable/coordinates/metrics from ds2 into ds1.
+    '''
+    
+    #-- NEED SOME PRELIMINARY CHECK --
+    
+    #-- in coordinates --
+    for ivar in listMetr:
+        if ivar in ds2.dims and ivar not in ds1.dims:
+            print("Add %s from ds2 in ds1" % ivar)
+            print("TO DO PROPERLY")
+    
+    #-- in variables -- 
+    for ivar in listMetr:
+        if ivar in list(ds2.keys()) and ivar not in list(ds1.keys()):
+            print("Add %s from ds2 in ds1" % ivar)
+            ds1[ivar] = eval("ds2.%s" % ivar)
+            
+    return
+
+
 #--------------
 # Vertical mesh
 #--------------
