@@ -231,28 +231,35 @@ class BulkFluxCOARE:
             
         return wspd, wspd_cfb
     
-    # def bulk_flux(self, t_sea, tair, rhum, uwnd, vwnd, wspd, wspd_cfb, 
-    #               patm2d, radlw, srflx, prate):
     def bulk_flux(self, ds_atm, ds_ocn):
         """
-        Main air-sea flux computation
+        Recompute CROCO air-sea fluxes based on COARE3 bulk algorithm.
         
         Parameters:
         -----------
-        t_sea : array - Sea surface temperature (°C)
-        tair : array - Air temperature (°C)  
-        rhum : array - Relative humidity (fraction or g/kg)
-        uwnd, vwnd : array - Wind components (m/s)
-        wspd : array - Wind magnitude (m/s)
-        wspd_cfb : array - Wind for current feedback (m/s)
-        patm2d : array - Atmospheric pressure (Pa)
-        radlw : array - Downward longwave radiation (W/m²)
-        srflx : array - Shortwave radiation (W/m²)
-        prate : array - Precipitation (m/s)
+        ds_atm: xarray dataset with regular atmospheric focing fields
+            t_sea : array - Sea surface temperature (°C)
+            tair : array - Air temperature (°C)  
+            rhum : array - Relative humidity (fraction or g/kg)
+            uwnd, vwnd : array - Wind components (m/s)
+            patm2d : array - Atmospheric pressure (Pa)
+            radlw : array - Downward longwave radiation (W/m²)
+            srflx : array - Shortwave radiation (W/m²)
+            prate : array - Precipitation (m/s)
+        ds_ocn: xarray dataset with (surface) CROCO model outputs. 
+                SST and surface currents are used respectively for:
+                  - temperature scaling parameters (Tstar), stability, latent heat and freshwater fluxes, and long wave radiations
+                  - current feedbacks (if cfb=True) estimates.
         
         Returns:
         --------
-        dict with fluxes and diagnostic variables
+        Xarray dataset with with fluxes and diagnostic variables.
+            - rho0*[sustr, svstr]
+
+        Notes:
+        ------
+            - sustr, svstr are devided by rho0 at compute time (bulk_flux.F), 
+              and multiplied by rho0 at output (wrt_his.F).
         """
         self.t00 = datetime.utcnow() 
         self.t0  = datetime.utcnow() 
@@ -328,9 +335,7 @@ class BulkFluxCOARE:
         Ribcu = -self.blk_ZW / (self.blk_Zabl * 0.004 * self.blk_beta**3)
         
         # Initial roughness length scale calculation
-        print("roughness length scale")
         for m in range(self.mb):
-            print("    ", m, "/", self.mb-1)
             iZo10 = self.g * Wstar[m, ::] / (charn * Wstar[m, ::]**3 + 0.11 * self.g * VisAir)
             iZoT10 = 0.1 * np.exp(self.vonKar**2 / (Ch10 * np.log(10.0 * iZo10)))
             
@@ -347,8 +352,6 @@ class BulkFluxCOARE:
             psi_u = self.bulk_psiu_coare(ZoLu)
             logus10 = np.log(self.blk_ZW * iZo10)
             Wstar[m, ::] = delW[m, ::] * self.vonKar / (logus10 - psi_u)
-
-            self.timemonitor()
         
         ZoLt = ZoLu * self.blk_ZToZW
         psi_t = self.bulk_psit_coare(ZoLt)
@@ -358,11 +361,13 @@ class BulkFluxCOARE:
         Qstar = delQ * cff_t
         
         # Charnock coefficient as a function of wind
-        print("Charnock coef.")
+        print("Compute Charnock coef.")
         charn = np.where(delW[0, ::] > 18.0, 0.018,
                 np.where(delW[0, ::] > 10.0, 
                         0.011 + 0.125 * (0.018 - 0.011) * (delW[0, ::] - 10.0),
                         0.011))
+
+        self.timemonitor()
         
         # === ITERATIVE LOOP ===
         print("==== Iterative estimates ====")
@@ -420,17 +425,15 @@ class BulkFluxCOARE:
             stau = self.cfb_slope * delW[0, ::] + self.cfb_offset
             sustr += stau * self.xgrid.interp(ds_ocn.u, 'x')
             svstr += stau * self.xgrid.interp(ds_ocn.v, 'y')
-        sustr *= self.rho0i
-        svstr *= self.rho0i
         
         # output
         ds_out = xr.Dataset(
             data_vars=dict(
-                Cd=(ds_ocn.temp.dims, Cd),
+                cd=(ds_ocn.temp.dims, Cd),
                 sustr=(ds_ocn.temp.dims, sustr.data),
                 svstr=(ds_ocn.temp.dims, svstr.data),
             ),
-            coords=ds_ocn.coords,
+            coords=ds_atm.coords,
             attrs=dict(description="Recomputed AO transfer coefficients, turbulent scales and associated fluxes"),
         )
         if self.cfb:
