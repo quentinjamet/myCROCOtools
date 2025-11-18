@@ -10,7 +10,7 @@ class BulkFluxCOARE:
     Computes turbulent and radiative air-sea fluxes using the COARE algorithm
     """
     
-    def __init__(self, cfb=False):
+    def __init__(self, cfb=False, sto=False):
         # Physical constants
         self.g          = 9.81                                # Gravitational acceleration [m/s^2]
         self.vonKar     = 0.41                                # von Karman constant
@@ -63,7 +63,13 @@ class BulkFluxCOARE:
             self.cfb_offset=0.008            #            s_tau = cfb_slope * wspd + cfb_offset [N.m^-3.s]
         else:
             self.mb = 1
-        
+
+        # stochastic perturbation
+        self.sto = sto
+        if sto:
+            self.mu = 0.0                   
+            self.sigma = 0.1
+
     def timemonitor(self):
         print("--- ", (datetime.utcnow()-self.t0).total_seconds(), " sec --")
         self.t0 = datetime.utcnow()
@@ -89,6 +95,33 @@ class BulkFluxCOARE:
                           boundary="extend")
         #-- check grid definition --
         # TBD
+
+
+    def stogen(self, ds):
+        """
+        Stochastic field generator.
+        """
+        if 'time' in ds.dims: 
+            da = xr.DataArray(
+                np.random.normal(0.0, 1.0, 
+                    (ds.dims["time"], ds.dims["eta_rho"], ds.dims["xi_rho"]) ),
+                dims=("time", "eta_rho", "xi_rho"),
+            )
+        elif 'number' in ds.dims:
+            da = xr.DataArray(
+                np.random.normal(0.0, 1.0, 
+                    (ds.dims["number"], ds.dims["eta_rho"], ds.dims["xi_rho"]) ),
+                dims=("number", "eta_rho", "xi_rho"),
+            )
+        else:
+            da = xr.DataArray(
+                np.random.normal(0.0, 1.0, 
+                    (ds.dims["eta_rho"], ds.dims["xi_rho"]) ),
+                dims=("eta_rho", "xi_rho"),
+            )
+
+        return da
+
 
     def spec_hum(self, RH, psfc, TairC):
         """
@@ -143,7 +176,6 @@ class BulkFluxCOARE:
     def exner_patm_from_tairabs(self, q, tairabs, z, psfc, Niter=3):
         """
         Computes Exner function and atmospheric pressure
-        !!! NEED SOME OPTIMISATION !!!
         """
         pair = psfc.copy()
         
@@ -278,6 +310,10 @@ class BulkFluxCOARE:
         [wspd, wspd_cfb] = self.comp_wspd(ds_atm, ds_ocn)
         patm2d = ds_atm.MSL
         
+        # generate stochastic 2D field, if needed
+        if self.sto:
+            sto2d = self.stogen(ds_atm)
+            t_sea = t_sea*sto2d
         
         # Basic atmospheric variables
         psurf = patm2d
@@ -347,6 +383,8 @@ class BulkFluxCOARE:
             unstable = Ri < 0.0
             ZoLu_unstable = CC * Ri / (1.0 + Ri / Ribcu)
             ZoLu_stable = CC * Ri / (1.0 + 3.0 * Ri / CC)
+            print("-- ZoLu_unstable --")
+            print(ZoLu_unstable)
             ZoLu = np.where(unstable, ZoLu_unstable, ZoLu_stable)
             
             psi_u = self.bulk_psiu_coare(ZoLu)
@@ -417,7 +455,7 @@ class BulkFluxCOARE:
         print("Transfer coefficient")
         aer  = rhoAir * delW[0, ::]
         Cd   = (Wstar[0, ::] / delW[0, ::])**2
-        
+
         # wind stress (@ rho-pts)
         sustr = Cd*aer*ds_atm.U10M
         svstr = Cd*aer*ds_atm.V10M
@@ -429,6 +467,12 @@ class BulkFluxCOARE:
         # output
         ds_out = xr.Dataset(
             data_vars=dict(
+                zolu=(ds_ocn.temp.dims, ZoLu.data),
+                psi_u=(ds_ocn.temp.dims, psi_u.data),
+                delw=(ds_ocn.temp.dims, delW[0, ::].data),
+                wstar=(ds_ocn.temp.dims, Wstar[0, ::].data),
+                tstar=(ds_ocn.temp.dims, Tstar.data),
+                qstar=(ds_ocn.temp.dims, Qstar.data),
                 cd=(ds_ocn.temp.dims, Cd),
                 sustr=(ds_ocn.temp.dims, sustr.data),
                 svstr=(ds_ocn.temp.dims, svstr.data),
