@@ -168,7 +168,7 @@ class BulkFluxCOARE:
         psat_ice = np.exp(alpi - betai/TairK - gami*np.log(TairK))
         psat_water = np.exp(alpw - betaw/TairK - gamw*np.log(TairK))
         
-        psat = np.where(ice_mask, psat_ice, psat_water) * coeff
+        psat = xr.where(ice_mask, psat_ice, psat_water) * coeff
         
         # Saturation humidity
         return (self.MvoMa * psat) / (patm + (self.MvoMa - 1.0) * psat)
@@ -260,7 +260,7 @@ class BulkFluxCOARE:
                              )
         else:
             wspd_cfb = xr.zeros_like(wspd)
-            
+
         return wspd, wspd_cfb
     
     def bulk_flux(self, ds_atm, ds_ocn):
@@ -295,7 +295,21 @@ class BulkFluxCOARE:
         """
         self.t00 = datetime.utcnow() 
         self.t0  = datetime.utcnow() 
-        
+
+        #-- check and adjust dimensions --
+        # both have ensemble dimension ; rename and add them both to the other
+        if 'number' in ds_ocn.dims and 'number' in ds_atm.dims:
+            ds_atm = ds_atm.rename({'number': 'number_atm'})
+            ds_ocn = ds_ocn.rename({'number': 'number_ocn'})
+            ds_atm = ds_atm.expand_dims(dim={"number_ocn": ds_ocn.dims["number_ocn"]}, axis=1)
+            ds_ocn = ds_ocn.expand_dims(dim={"number_atm": ds_atm.dims["number_atm"]}, axis=0)
+        # only ocean dataset has ensemble dimension ; add the dimension to atmospheric dataset
+        if 'number' in ds_ocn.dims and 'number' not in ds_atm.dims:
+            ds_atm = ds_atm.expand_dims(dim={"number": ds_ocn.dims["number"]}, axis=0)
+        # only atmospheric dataset has ensemble dimension ; add the dimension to ocean dataset
+        if 'number' in ds_atm.dims and 'number' not in ds_ocn.dims:
+            ds_ocn = ds_ocn.expand_dims(dim={"number": ds_atm.dims["number"]}, axis=0)
+
         #-- construct xgcm grid --
         print("Construct xgcm grid")
         self.make_xgrid(ds_ocn)
@@ -349,7 +363,7 @@ class BulkFluxCOARE:
         
         # Air-sea gradients
         print("Compute air-sea gradients")
-        delW = np.zeros((2,) + wspd0.shape)
+        delW = np.zeros((2,) + wspd0_cfb.shape)
         delW[0, ::] = np.sqrt(wspd0**2 + 0.25)
         delW[1, ::] = np.sqrt(wspd0_cfb**2 + 0.25)
         delQ = Q - Qsea
@@ -366,7 +380,7 @@ class BulkFluxCOARE:
         Wstar[:] = 0.035 * delW * self.Log10oLogZw
         
         VisAir = self.air_visc(TairC)
-        charn = np.full_like(TairC, 0.011)
+        charn = xr.full_like(TairC, 0.011)
         Ch10 = 0.00115
         Ribcu = -self.blk_ZW / (self.blk_Zabl * 0.004 * self.blk_beta**3)
         
@@ -383,8 +397,6 @@ class BulkFluxCOARE:
             unstable = Ri < 0.0
             ZoLu_unstable = CC * Ri / (1.0 + Ri / Ribcu)
             ZoLu_stable = CC * Ri / (1.0 + 3.0 * Ri / CC)
-            print("-- ZoLu_unstable --")
-            print(ZoLu_unstable)
             ZoLu = np.where(unstable, ZoLu_unstable, ZoLu_stable)
             
             psi_u = self.bulk_psiu_coare(ZoLu)
@@ -459,6 +471,8 @@ class BulkFluxCOARE:
         # wind stress (@ rho-pts)
         sustr = Cd*aer*ds_atm.U10M
         svstr = Cd*aer*ds_atm.V10M
+
+
         if self.cfb:
             stau = self.cfb_slope * delW[0, ::] + self.cfb_offset
             sustr += stau * self.xgrid.interp(ds_ocn.u, 'x')
