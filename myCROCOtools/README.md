@@ -2,7 +2,7 @@
 
 These tools aims at processing CROCO model outputs. It contains:
 
-- __init__.py: initialisation file
+- \_\_init\_\_.py: initialisation file
 - bulk_flux.py: offline version of the bulk_flux.F of CROCO, inclusing COARE3 algorythme only
 - convection.py: specific diagnostics for NBQ, (free) convection simulations
 - convert_as_cmems.py: Convert native NEMO model output to a CMEMS-like dataset (i.e. regular grid, convection names and units), to be used in CROCO preprocessing tools.
@@ -11,7 +11,7 @@ These tools aims at processing CROCO model outputs. It contains:
 - plot.py: for plots.
 
 
-### __init__.py
+### \_\_init\_\_.py
 
 ### bulk_flux.py
 
