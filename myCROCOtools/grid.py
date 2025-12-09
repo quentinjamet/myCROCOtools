@@ -388,3 +388,86 @@ def vel_rho(ds):
 #
 #
 #    return tmpout
+
+
+##################################
+# Spatial coarsening with residual
+##################################
+
+def coarsen_with_residual(ds, coarsen_dict, boundary='trim'):
+    """
+    Computes a coarsening of original field in ds along a number of grid points given by coarsen_dict, 
+    and compute the residual associated with this coarsening by insuring that the coarsed residual is zero.
+    
+    Parameters:
+    -----------
+    ds : xarray.Dataset
+        Original dataset
+    coarsen_dict : dict
+        Dictionary of dimensions to coarsen, e.g., {'x': 2, 'y': 3}
+    boundary : str
+        'trim' (default) or 'pad' - boundary handling method
+    
+    Returns:
+    --------
+    ds_coarsen: xarray.Dataset
+	Coarsen fields, on the coarsen grid
+    ds_coarsen_expanded : xarray.Dataset
+        Coarsened dataset duplicated on original grid
+    residual : xarray.Dataset
+        Residual (original_ds - duplicated_coarsen_ds)
+    """
+    
+    # 1. Apply coarsen with mean
+    ds_coarsen = ds.coarsen(coarsen_dict, boundary=boundary).mean()
+    
+    # 2. Duplicate to restore original dimensions
+    # Build a new dataset with the correct dimensions
+    expanded_data_vars = {}
+    
+    for var in ds_coarsen.data_vars:
+        # Repeat values along each dimension
+        data = ds_coarsen[var].values
+        dims = ds_coarsen[var].dims
+        
+        for dim in dims:
+            if dim in coarsen_dict:
+                axis = dims.index(dim)
+                data = np.repeat(data, coarsen_dict[dim], axis=axis)
+        
+        expanded_data_vars[var] = (dims, data)
+    
+    # Build new coordinates
+    new_coords = {}
+    for dim in ds_coarsen.dims:
+        if dim in coarsen_dict:
+            # Repeat coordinates
+            new_coords[dim] = np.repeat(ds_coarsen[dim].values, coarsen_dict[dim])
+        else:
+            new_coords[dim] = ds_coarsen[dim].values
+    
+    ds_coarsen_expanded = xr.Dataset(expanded_data_vars, coords=new_coords)
+    
+    # 3. If boundary='trim', adjust dimensions
+    if boundary == 'trim':
+        # Find common size (minimum between original and expanded)
+        common_slices = {}
+        for dim in coarsen_dict.keys():
+            size = min(len(ds[dim]), len(ds_coarsen_expanded[dim]))
+            common_slices[dim] = slice(0, size)
+        
+        # Adjust both datasets to the same size
+        ds_aligned = ds.isel(common_slices)
+        ds_coarsen_expanded = ds_coarsen_expanded.isel(common_slices)
+        
+        # Align coordinates exactly
+        ds_coarsen_expanded = ds_coarsen_expanded.assign_coords({
+            dim: ds_aligned[dim] for dim in coarsen_dict.keys()
+        })
+    else:
+        ds_aligned = ds
+    
+    # 4. Compute residual
+    residual = ds_aligned - ds_coarsen_expanded
+    
+    return ds_coarsen, ds_coarsen_expanded, residual
