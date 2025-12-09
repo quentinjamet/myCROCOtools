@@ -35,6 +35,7 @@ class BulkFluxCOARE:
         self.cpi        = 1.0 / self.cp
         self.r3         = 1.0/3.0
         self.eps        = 1e-20
+        self.Cd         = 1.2e-3                              # Canonical value for air-sea momentum exchange coef [nd]
         
         # Height parameters
         self.blk_ZW = 10.0         # Wind height [m]
@@ -57,7 +58,7 @@ class BulkFluxCOARE:
         # current feedback parameters
         self.cfb = cfb                   #
         if cfb:
-            self.mb = 2                      # to compute Wstar associated to both absolute and relative wind formulation
+            self.mb = 2                      # to compute Wstar associated with both absolute and relative wind formulation
             self.swparam = 0.3               # wind correction: Ua-(1-sw)*Uo
             self.cfb_slope=-0.0029           # wind-stress correction using wind speed:  rho0*sustr + s_tau*Uo
             self.cfb_offset=0.008            #            s_tau = cfb_slope * wspd + cfb_offset [N.m^-3.s]
@@ -68,7 +69,7 @@ class BulkFluxCOARE:
         self.sto = sto
         if sto:
             self.mu = 0.0                   
-            self.sigma = 0.1
+            self.sigma = 0.01
 
     def timemonitor(self):
         print("--- ", (datetime.utcnow()-self.t0).total_seconds(), " sec --")
@@ -100,22 +101,35 @@ class BulkFluxCOARE:
     def stogen(self, ds):
         """
         Stochastic field generator.
+        ds is used as reference to construct appropriate stochatic field.
         """
         if 'time' in ds.dims: 
             da = xr.DataArray(
-                np.random.normal(0.0, 1.0, 
+                np.random.normal(self.mu, self.sigma, 
                     (ds.dims["time"], ds.dims["eta_rho"], ds.dims["xi_rho"]) ),
                 dims=("time", "eta_rho", "xi_rho"),
             )
         elif 'number' in ds.dims:
             da = xr.DataArray(
-                np.random.normal(0.0, 1.0, 
+                np.random.normal(self.mu, self.sigma,
                     (ds.dims["number"], ds.dims["eta_rho"], ds.dims["xi_rho"]) ),
                 dims=("number", "eta_rho", "xi_rho"),
             )
+        elif 'number_atm' in ds.dims:
+            da = xr.DataArray(
+                np.random.normal(self.mu, self.sigma,
+                    (ds.dims["number_atm"], ds.dims["eta_rho"], ds.dims["xi_rho"]) ),
+                dims=("number_atm", "eta_rho", "xi_rho"),
+            )
+        elif 'number_ocn' in ds.dims:
+            da = xr.DataArray(
+                np.random.normal(self.mu, self.sigma,
+                    (ds.dims["number_ocn"], ds.dims["eta_rho"], ds.dims["xi_rho"]) ),
+                dims=("number_ocn", "eta_rho", "xi_rho"),
+            )
         else:
             da = xr.DataArray(
-                np.random.normal(0.0, 1.0, 
+                np.random.normal(self.mu, self.sigma,
                     (ds.dims["eta_rho"], ds.dims["xi_rho"]) ),
                 dims=("eta_rho", "xi_rho"),
             )
@@ -313,7 +327,7 @@ class BulkFluxCOARE:
         #-- construct xgcm grid --
         print("Construct xgcm grid")
         self.make_xgrid(ds_ocn)
-        self.timemonitor()
+        #self.timemonitor()
         
         #-- extract variables from xarray dataset (to be changed) --
         t_sea = ds_ocn.temp
@@ -327,7 +341,7 @@ class BulkFluxCOARE:
         # generate stochastic 2D field, if needed
         if self.sto:
             sto2d = self.stogen(ds_atm)
-            t_sea = t_sea*sto2d
+            t_sea = t_sea*(1+sto2d)
         
         # Basic atmospheric variables
         psurf = patm2d
@@ -344,22 +358,22 @@ class BulkFluxCOARE:
         # Specific humidity
         print("Compute specific humidity")
         Q = self.spec_hum(rhum, psurf, TairC)
-        self.timemonitor()
+        #self.timemonitor()
         
         # Atmospheric Exner function
         print("Compute Exner function")
         iexna, patm = self.exner_patm_from_tairabs(Q, TairK, self.blk_ZT, psurf)
-        self.timemonitor()
+        #self.timemonitor()
         
         # Air density
         print("Compute air density")
         rhoAir = patm * (1.0 + Q) / (self.blk_Rgas * TairK * (1.0 + self.MvoMa * Q))
-        self.timemonitor()
+        #self.timemonitor()
         
         # Surface saturation humidity
         print("Compute humidity at saturation")
         Qsea = self.qsat(TseaK, psurf, 0.98)
-        self.timemonitor()
+        #self.timemonitor()
         
         # Air-sea gradients
         print("Compute air-sea gradients")
@@ -367,7 +381,7 @@ class BulkFluxCOARE:
         delW[0, ::] = np.sqrt(wspd0**2 + 0.25)
         delW[1, ::] = np.sqrt(wspd0_cfb**2 + 0.25)
         delQ = Q - Qsea
-        self.timemonitor()
+        #self.timemonitor()
         
         cff = self.CtoK * (iexna - iexns)
         delT = TairC * iexna - TseaC * iexns + cff
@@ -435,7 +449,7 @@ class BulkFluxCOARE:
                 ZoLu = (self.vonKar * self.g * self.blk_ZW * 
                        (Tstar * (1.0 + self.cpvir * Q) + self.cpvir * TairK * Qstar) /
                        (TairK * Wstar[m, ::]**2 * (1.0 + self.cpvir * Q) + self.eps))
-                
+
                 # Stability functions
                 psi_u = self.bulk_psiu_coare(ZoLu)
                 logus10 = np.log(self.blk_ZW * iZoW)
@@ -467,29 +481,44 @@ class BulkFluxCOARE:
         print("Transfer coefficient")
         aer  = rhoAir * delW[0, ::]
         Cd   = (Wstar[0, ::] / delW[0, ::])**2
+        Cd_cfb = (Wstar[1, ::] / delW[1, ::])**2
 
         # wind stress (@ rho-pts)
         sustr = Cd*aer*ds_atm.U10M
         svstr = Cd*aer*ds_atm.V10M
+        sustr_cstCd = self.Cd*aer*ds_atm.U10M
+        svstr_cstCd = self.Cd*aer*ds_atm.V10M
 
 
         if self.cfb:
+            # store estimates of absolute wind stress
+            sustr0 = sustr.copy()
+            svstr0 = svstr.copy()
+            # update with current feedback (stress-correction approach)
             stau = self.cfb_slope * delW[0, ::] + self.cfb_offset
             sustr += stau * self.xgrid.interp(ds_ocn.u, 'x')
             svstr += stau * self.xgrid.interp(ds_ocn.v, 'y')
+            sustr_cstCd += stau * self.xgrid.interp(ds_ocn.u, 'x')
+            svstr_cstCd += stau * self.xgrid.interp(ds_ocn.v, 'y')
         
         # output
         ds_out = xr.Dataset(
             data_vars=dict(
                 zolu=(ds_ocn.temp.dims, ZoLu.data),
                 psi_u=(ds_ocn.temp.dims, psi_u.data),
+                charn=(ds_ocn.temp.dims, charn.data),
                 delw=(ds_ocn.temp.dims, delW[0, ::].data),
                 wstar=(ds_ocn.temp.dims, Wstar[0, ::].data),
                 tstar=(ds_ocn.temp.dims, Tstar.data),
                 qstar=(ds_ocn.temp.dims, Qstar.data),
                 cd=(ds_ocn.temp.dims, Cd),
+                cd_cfb=(ds_ocn.temp.dims, Cd_cfb),
+                sustr0=(ds_ocn.temp.dims, sustr0.data),
+                svstr0=(ds_ocn.temp.dims, svstr0.data),
                 sustr=(ds_ocn.temp.dims, sustr.data),
                 svstr=(ds_ocn.temp.dims, svstr.data),
+                sustr_cstCd=(ds_ocn.temp.dims, sustr_cstCd.data),
+                svstr_cstCd=(ds_ocn.temp.dims, svstr_cstCd.data),
             ),
             coords=ds_atm.coords,
             attrs=dict(description="Recomputed AO transfer coefficients, turbulent scales and associated fluxes"),
