@@ -8,3 +8,4 @@ from .plot import *
 from .energy import *
 from .convert_as_cmems import *
 from .bulk_flux import *
+from .anova import *

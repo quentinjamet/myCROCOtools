@@ -397,7 +397,7 @@ def vel_rho(ds):
 def coarsen_with_residual(ds, coarsen_dict, boundary='trim'):
     """
     Computes a coarsening of original field in ds along a number of grid points given by coarsen_dict, 
-    and compute the residual associated with this coarsening by insuring that the coarsed residual is zero.
+    and compute the residual associated with this coarsening by insuring that the coarsened residual is zero.
     
     Parameters:
     -----------
@@ -417,6 +417,11 @@ def coarsen_with_residual(ds, coarsen_dict, boundary='trim'):
     residual : xarray.Dataset
         Residual (original_ds - duplicated_coarsen_ds)
     """
+
+    # remove non-numerical variables
+    numeric_vars = [var for var in ds.data_vars 
+                    if np.issubdtype(ds[var].dtype, np.number)]
+    ds = ds[numeric_vars]
     
     # 1. Apply coarsen with mean
     ds_coarsen = ds.coarsen(coarsen_dict, boundary=boundary).mean()
