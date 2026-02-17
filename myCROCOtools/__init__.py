@@ -9,3 +9,4 @@ from .energy import *
 from .convert_as_cmems import *
 from .bulk_flux import *
 from .anova import *
+from .location_uncertainty import *

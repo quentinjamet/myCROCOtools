@@ -163,6 +163,12 @@ def kespect(ds, tserie='partial', ttt=[-1], anoma=False, scaling='density', metr
          periodic=False)
   #####################
 
+  #-- check if dataset is a LU type, and compute spectra of associated noise accordingly --
+  if ds.attrs != {} and "LU time filtered dataset" in ds.attrs['title']:
+    ds_is_LU = True
+  else:
+   ds_is_LU = False
+
   #-- parameters --
   dxy = ds.dx_rho.mean(dim=['eta_rho', 'xi_rho']).data
 
@@ -175,12 +181,16 @@ def kespect(ds, tserie='partial', ttt=[-1], anoma=False, scaling='density', metr
   else:
     sys.exit("Don't know option tserie=%s" % tserie)
 
-  ds_spectra={}
+  
+  ds_spectra = {}
+  if ds_is_LU:
+    ds_spectra_noise = {}
+
   for it in range(nt):
     da = xr.Dataset( )
-    da['u'] = grid_xy.interp(ds.u[ttt[it], ...],'x')
-    da['v'] = grid_xy.interp(ds.v[ttt[it], ...],'y')
-    da['w'] = grid_z.interp(ds.omega[ttt[it], ...],'z')
+    da['u'] = grid_xy.interp(ds.u.isel(time=ttt[it]),'x')
+    da['v'] = grid_xy.interp(ds.v.isel(time=ttt[it]),'y')
+    da['w'] = grid_z.interp(ds.omega.isel(time=ttt[it]),'z')
     #- remove horizontal mean -
     if anoma:
       print('-- Remove horizontal mean --')
@@ -202,15 +212,55 @@ def kespect(ds, tserie='partial', ttt=[-1], anoma=False, scaling='density', metr
 
     #
     if metric == 'u':
-      ds_spectra[it] = 0.5*( (abs(uhat)) / (dk_theta*dk_rr**2) ).sum(axis=0)
+      ds_spectra[it] = 0.5*( (abs(uhat)) / (dk_theta*dk_rr**2) )
     elif metric == 'v':
-      ds_spectra[it] = 0.5*( (abs(vhat)) / (dk_theta*dk_rr**2) ).sum(axis=0)
+      ds_spectra[it] = 0.5*( (abs(vhat)) / (dk_theta*dk_rr**2) )
     elif metric == 'w':
-      ds_spectra[it] = 0.5*( (abs(what)) / (dk_theta*dk_rr**2) ).sum(axis=0)
+      ds_spectra[it] = 0.5*( (abs(what)) / (dk_theta*dk_rr**2) )
     elif metric == 'uv':
-      ds_spectra[it] = 0.5*( (abs(uhat) + abs(vhat)) / (dk_theta*dk_rr**2) ).sum(axis=0)
+      ds_spectra[it] = 0.5*( (abs(uhat) + abs(vhat)) / (dk_theta*dk_rr**2) )
     elif metric == 'uvw':
-      ds_spectra[it] = 0.5*( (abs(uhat) + abs(vhat) + abs(what)) / (dk_theta*dk_rr**2) ).sum(axis=0)
+      ds_spectra[it] = 0.5*( (abs(uhat) + abs(vhat) + abs(what)) / (dk_theta*dk_rr**2) )
 
-  return ds_spectra, uhat.freq_r
+    if ds_is_LU:
+      da = xr.Dataset( )
+      da['u'] = grid_xy.interp(ds.sdBt_x.isel(number=0, time=ttt[it])/np.sqrt(ds.tau)/ds.dBt,'x')
+      da['v'] = grid_xy.interp(ds.sdBt_y.isel(number=0, time=ttt[it])/np.sqrt(ds.tau)/ds.dBt,'y')
+      da['w'] = grid_z.interp(ds.sdBt_z.isel(number=0, time=ttt[it])/np.sqrt(ds.tau)/ds.dBt,'z')
+      #- remove horizontal mean -
+      if anoma:
+        print('-- Remove horizontal mean --')
+        da=da-da.mean(dim=['eta_rho', 'xi_rho'])
+      # rename and turn dimensions in meters (instead of grid index)
+      da = da.rename({'s_rho': 'z','eta_rho': 'y', 'xi_rho': 'x'})
+      dxy = ds.dx_rho.mean(dim=['eta_rho', 'xi_rho']).data
+      da = da.assign_coords({"y": ds.y_rho[:, 0].data, "x": ds.x_rho[0, :].data})
+      #- compute spectra ; -
+      uhat = xrft.isotropic_power_spectrum(da.u, \
+             dim=['x', 'y'], true_phase=True, true_amplitude=True, scaling=scaling).compute()
+      vhat = xrft.isotropic_power_spectrum(da.v, \
+             dim=['x', 'y'], true_phase=True, true_amplitude=True, scaling=scaling).compute()
+      what = xrft.isotropic_power_spectrum(da.w, \
+             dim=['x', 'y'], true_phase=True, true_amplitude=True, scaling=scaling).compute()
+      #- compute normalisation to insure Parseval's by integrating along freq_r -
+      dk_rr = np.mean(uhat.freq_r[1:].data-uhat.freq_r[:-1].data)
+      dk_theta = 2*np.pi*uhat.freq_r
+  
+      #
+      if metric == 'u':
+        ds_spectra_noise[it] = 0.5*( (abs(uhat)) / (dk_theta*dk_rr**2) )
+      elif metric == 'v':
+        ds_spectra_noise[it] = 0.5*( (abs(vhat)) / (dk_theta*dk_rr**2) )
+      elif metric == 'w':
+        ds_spectra_noise[it] = 0.5*( (abs(what)) / (dk_theta*dk_rr**2) )
+      elif metric == 'uv':
+        ds_spectra_noise[it] = 0.5*( (abs(uhat) + abs(vhat)) / (dk_theta*dk_rr**2) )
+      elif metric == 'uvw':
+        ds_spectra_noise[it] = 0.5*( (abs(uhat) + abs(vhat) + abs(what)) / (dk_theta*dk_rr**2) )
+
+  #-- output --
+  if ds_is_LU:
+    return ds_spectra, ds_spectra_noise, uhat.freq_r
+  else:
+    return ds_spectra, uhat.freq_r
 

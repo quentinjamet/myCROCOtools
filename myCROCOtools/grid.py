@@ -107,14 +107,14 @@ def grid_z(ds, tvar=False):
     dz_rho    = xr.zeros_like(z_rho)
     dz_rho[:] = z_w[1:, ...].data-z_w[:-1, ...].data
     dz_w      = xr.zeros_like(z_w)
-    dz_w[1:-1, ...] = z_rho[1:, ...]-z_rho[:-1, ...].data
+    dz_w[1:-1, ...] = z_rho[1:, ...].data-z_rho[:-1, ...].data
     dz_w[0, ...]    = (z_rho[1, ...]-z_rho[0, ...].data)/2
     dz_w[-1, ...]   = (z_rho[-1, ...]-z_rho[-2, ...].data)/2
 
-  ds['z_rho'] =z_rho
-  ds['z_w']   =z_w
-  ds['dz_rho']=dz_rho
-  ds['dz_w']  =dz_w
+  ds['z_rho']  = z_rho
+  ds['z_w']    = z_w
+  ds['dz_rho'] = dz_rho
+  ds['dz_w']   = dz_w
  
   return ds
 
@@ -158,7 +158,7 @@ def grid_hz(ds, vertical=False):
     coords_xy={'x':{'center':'xi_rho',  'inner':'xi_u'}, 
                'y':{'center':'eta_rho', 'inner':'eta_v'}}
 #            'z':{'center':'s_rho',   'outer':'s_w'}}
-    grid_xy = Grid(ds, 
+    grid_xy = Grid(ds,
             coords=coords_xy,
             boundary='extend')
   # vertical grid
@@ -172,7 +172,7 @@ def grid_hz(ds, vertical=False):
     coords_z={'z':{'center':'s_rho',   'outer':'s_w'}}
     grid_z = Grid(ds,
               coords=coords_z,
-              boundary='extrapolate')
+              boundary='extend')
 
   #####################
 
@@ -187,6 +187,7 @@ def grid_hz(ds, vertical=False):
       ds['dy_v'] = grid_xy.interp(1/ds['pn'],'y')
       ds['dx_psi'] = grid_xy.interp(grid_xy.interp(1/ds['pm'], 'y'),  'x') 
       ds['dy_psi'] = grid_xy.interp(grid_xy.interp(1/ds['pn'], 'y'),  'x')
+      
   
   
   if 'SPHERICAL' in ds.attrs[cpp]:
@@ -198,7 +199,24 @@ def grid_hz(ds, vertical=False):
       ds['lon_psi'] = grid_xy.interp(ds.lon_v,'x')
       ds['lat_psi'] = grid_xy.interp(ds.lat_u,'y')
       _coords = ['lon_u','lat_u','lon_v','lat_v','lon_psi','lat_psi']
-      ds = ds.set_coords(_coords)
+  else:
+      print('- Computes x/y at u,v and psi points, and assign to the dataset as coordinates')
+      ds['x_u'] = grid_xy.interp(ds.x_rho,'x')
+      ds['y_u'] = grid_xy.interp(ds.y_rho,'x')
+      ds['x_v'] = grid_xy.interp(ds.x_rho,'y')
+      ds['y_v'] = grid_xy.interp(ds.y_rho,'y')
+      ds['x_psi'] = grid_xy.interp(ds.x_v,'x')
+      ds['y_psi'] = grid_xy.interp(ds.y_u,'y')
+      # correct lower index in case of periodic boundary conditions
+      if 'EW_PERIODIC' in ds.attrs['CPP-options']:
+          ds['x_u'][:, 0] = ds['x_u'][:, 1] - (ds['x_u'][:, 2]-ds['x_u'][:, 1])
+          ds['x_psi'][:, 0] = ds['x_psi'][:, 1] - (ds['x_psi'][:, 2]-ds['x_psi'][:, 1])
+      if 'NS_PERIODIC' in ds.attrs['CPP-options']:
+          ds['y_v'][0, :] = ds['y_v'][1, :] - (ds['y_v'][2, :]-ds['y_v'][1, :])
+          ds['y_psi'][0, :] = ds['y_psi'][1, :] - (ds['y_psi'][2, :]-ds['y_psi'][1, :])
+      # assign as coordinate
+      _coords = ['x_u','y_u','x_v','y_v','x_psi','y_psi']
+  ds = ds.set_coords(_coords)
       
   if vertical and threeD:
       ds['z_u'] = grid_xy.interp(ds.z_rho,'x')
@@ -228,7 +246,11 @@ def grid_hz(ds, vertical=False):
       ds['dz_u']   = grid_xy.interp(ds.dz_rho,'x')
       ds['dz_v']   = grid_xy.interp(ds.dz_rho,'y')
       ds['dz_psi'] = grid_xy.interp(ds.dz_v,'x')
-      
+      if 'dz_w' in ds.data_vars:
+          ds['dz_wu']  = grid_xy.interp(ds.dz_w, 'x')
+          ds['dz_wv']  = grid_xy.interp(ds.dz_w, 'y')
+      else:
+          print(f"Can't add dz_wu and dz_wv metric because dz_w is not yet defined. Can be added with grid_z().")
 
   # add areas metrics for rho,u,v and psi points
   if 'pm' in ds and 'pn' in ds:
@@ -271,7 +293,7 @@ def grid_hz(ds, vertical=False):
 
 
   if ds.attrs[cpp].find('EW_PERIODIC')!= -1 and ds.attrs[cpp].find('NS_PERIODIC')!= -1:
-    ds.attrs['xgcm-Grid_xy'] = Grid(ds, 
+    ds.attrs['xgcm-Grid_xy'] = Grid(ds,
             coords=coords_xy,
             metrics = metrics_xy,
             periodic=True)
@@ -285,7 +307,7 @@ def grid_hz(ds, vertical=False):
     ds.attrs['xgcm-Grid_z'] = Grid(ds,
             coords=coords_z,
             metrics = metrics_z,
-            boundary='extrapolate')
+            boundary='extend')
 
 
   return ds
@@ -317,7 +339,7 @@ def vel_rho(ds):
     coords={'x':{'center':'xi_rho',  'inner':'xi_u'}, 
             'y':{'center':'eta_rho', 'inner':'eta_v'}, 
             'z':{'center':'s_rho',   'outer':'s_w'}}
-    grid = Grid(ds, 
+    grid = Grid(ds,
             coords=coords,
             boundary='extend')
   #####################
@@ -397,7 +419,8 @@ def vel_rho(ds):
 def coarsen_with_residual(ds, coarsen_dict, boundary='trim'):
     """
     Computes a coarsening of original field in ds along a number of grid points given by coarsen_dict, 
-    and compute the residual associated with this coarsening by insuring that the coarsened residual is zero.
+    and compute the residual associated with this coarsening by insuring that the residual is zero upon additional coarsening,
+    and that it preseves dynamical constraints such as non-divergence.
     
     Parameters:
     -----------

@@ -45,7 +45,7 @@ def mld(ds, strat=1.9620001275490499e-6):
   rho0=1024
 
   #-- compute --
-  ds['N2_m']  = -g/rho0 * grid_z.diff(ds.rho.mean(dim=['xi_rho','eta_rho']), 'z', boundary='extrapolate') / ds.dz_w.mean(dim=['xi_rho','eta_rho'])
+  ds['N2_m']  = -g/rho0 * grid_z.diff(ds.rho.mean(dim=['xi_rho','eta_rho']), 'z', boundary='extend') / ds.dz_w.mean(dim=['xi_rho','eta_rho'])
 
   mld  = xr.zeros_like(ds.time)
   kmld = xr.zeros_like(ds.time)
@@ -145,14 +145,14 @@ def wb(ds, tracer='b', sbcs=None, full=False):
   
   #-- resolved vertical fluxes --
   print('-->> Resolved fluxes')
-  wb = ds.omega * grid_z.interp(bbb, 'z', boundary='extrapolate')
+  wb = ds.omega * grid_z.interp(bbb, 'z', boundary='extend')
   # set surface boundary condition to zero 
   wb[:, -1, ...]=0.0
 
   #-- sgs vertical fluxes (if available) --
   if 'AKt' in ds.keys():
     print('-->> Sub-grid scale fluxes based on AKt in ds ; apply boundary conditions given by sbcs')
-    wb_sgs = -ds.AKt * grid_z.diff(bbb, 'z', boundary='extrapolate')/ds.dz_w
+    wb_sgs = -ds.AKt * grid_z.diff(bbb, 'z', boundary='extend')/ds.dz_w
     # adjust surface boundary condition (Qnet)
     wb_sgs[:, 0, ...] = 0.
     wb_sgs[:, -1, ...] = wb0
