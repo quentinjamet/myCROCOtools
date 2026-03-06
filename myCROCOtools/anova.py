@@ -41,7 +41,12 @@ def anova(da, dims=None):
     else:
         ds = da.copy().to_dataset()
         ds = ds.rename({da.name: 'varin'})
-        
+   
+    #-- check that requested dimensions are available in da --
+    if not all(dim in da.dims for dim in dims):
+        missing = [dim for dim in dims if dim not in da.dims]
+        print(f"STOP: Dimension(s) {missing} is (are) not in input Xarray DataArray")     
+        return
     
     #-- estimate number of dimensions --
     ndim = len(dims)
