@@ -102,13 +102,13 @@ def anova(da, dims=None):
         local_lab  = ''.join(local_labs)
         print(f"Compute 2nd order interaction terms associated with dimensions: {local_dims}")
         #- labels for the means over all but the considered dimensions -
-        # 1/ start with the 2 dimensional mean
+        # 1/ start with 2 dimensional data
         avg_lab = not_in(labels, local_labs)
         if ndim == 2:
-            cff = ds.varin
+            cff = ds.varin.copy(deep=True)
         else:
-            cff = eval(f"ds.m_{avg_lab}")
-        # 2/ substract 1 dimensional means
+            cff = eval(f"ds.m_{avg_lab}.copy(deep=True)")
+        # 2/ substract 1 dimensional data
         for iii in range(2):
             avg_lab = not_in(labels, local_labs[iii])
             cff -= eval(f"ds.m_{avg_lab}")
@@ -128,19 +128,19 @@ def anova(da, dims=None):
             local_labs = labs_comb[icomb]
             local_lab  = ''.join(local_labs)
             print(f"Compute 3rd order interaction terms associated with dimensions: {local_dims}")
-            # 1/ start with the 3 dimentional mean
+            # 1/ start with the 3 dimentional data
             avg_lab   = not_in(labels, local_labs)
             if ndim == 3:
-                cff = ds.varin
+                cff = ds.varin.copy(deep=True)
             else:
-                cff = eval(f"ds.m_{avg_lab}")
-            # 2/ substract 2 dimensional means
+                cff = eval(f"ds.m_{avg_lab}.copy(deep=True)")
+            # 2/ substract 2 dimensional data
             dims_comb_2 = tuple(combinations(local_dims, 2))
             labs_comb_2 = tuple(combinations(local_labs, 2))
             for iicomb in range(len(dims_comb_2)):
                 avg_lab = not_in(labels, labs_comb_2[iicomb])
                 cff -= eval(f"ds.m_{avg_lab}")
-            # 3/ add 1 dimensional means
+            # 3/ add 1 dimensional data
             for iii in range(3):
                 avg_lab = not_in(labels, local_labs[iii])
                 cff += eval(f"ds.m_{avg_lab}")
@@ -163,9 +163,9 @@ def anova(da, dims=None):
             # 1/ start with the 4 dimensional mean
             avg_lab = not_in(labels, local_labs)
             if ndim == 4:
-                cff = ds.varin
+                cff = ds.varin.copy(deep=True)
             else:
-                cff = eval(f"ds.m_{avg_lab}")
+                cff = eval(f"ds.m_{avg_lab}.copy(deep=True)")
             # 2/ substract 3 dimensional means
             dims_comb_3 = tuple(combinations(local_dims, 3))
             labs_comb_3 = tuple(combinations(local_labs, 3))
