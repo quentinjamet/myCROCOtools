@@ -41,6 +41,16 @@ def anova(da, dims=None):
         An example with oceanographic data can be the sensitivity of the temporal mean (or temporal variance) to, e.g. initial conditions, 
         atmospheric forcing, open boundary conditions.
 
+
+    Examples
+    --------
+    Basic usage for a 3-way ANOVA decomposition:
+    
+    >>> import xarray as xr
+    >>> ds = <an xarray.Dataset >
+    >>> anova = anova(ds, dims=('dim1', 'dim2', 'dim3'))
+
+
     References
     ----------
     .. Yip, S., Ferro, C. A. T., Stephenson, D. B., and Hawkins, E.: A Simple, Coherent Framework for Partitioning Uncertainty in Climate Predictions, J. Climate, 24, 4634–4643
