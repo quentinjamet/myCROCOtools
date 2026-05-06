@@ -25,6 +25,7 @@ def anova(da, dims=None):
     Compute global variance, variance associated to each dimension (i.e. main effect), and interactions across dimensions (up to 4th order).
     
     Input:
+    ------
         - ds: xarray DataArray
         - dims: list of dimensions to perform ANOVA.
                 If len(dims)==1, this is equivalent to standard variance, with a biased estimator (i.e. ddof=0). 
@@ -32,6 +33,13 @@ def anova(da, dims=None):
                 If len(dims)==3, 3-way ANOVA, with up to 3rd order interaction terms
                 If len(dims)==4, 4-way ANOVA, with up to 4th order interaction terms
                 Higher ANOVA are not coded yet (08/11/2025).
+
+    Note:
+    -----
+        We refer to n-way ANOVA, with n the number of dimensions considered, but formally this should be (n-1) number of dimensions considered 
+        with the remaining dimension being that along which we are interested in evaluating the sensitivity of the mean to other factors.
+        An example with oceanographic data can be the sensitivity of the temporal mean (or temporal variance) to, e.g. initial conditions, 
+        atmospheric forcing, open boundary conditions.
     """
     
     #-- verify that da is a xarray dataArray, then convert into a dataset --
@@ -56,9 +64,10 @@ def anova(da, dims=None):
     elif ndim > 4:
         print("STOP: 5-way and higher ANOVA have not been coded yet :/.")
         return
-    #- define labels for each dimension -
+    #- define labels for each dimension and write into xarray.Dataset attributes -
     labels = tuple(str(idim) for idim in range(1, ndim+1))
-    
+    ds.attrs['dim_mapping'] = str(dict(zip(labels, dims)))
+ 
     #-------------------
     #-- compute means --
     #-------------------    
