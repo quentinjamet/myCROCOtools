@@ -40,6 +40,13 @@ def anova(da, dims=None):
         with the remaining dimension being that along which we are interested in evaluating the sensitivity of the mean to other factors.
         An example with oceanographic data can be the sensitivity of the temporal mean (or temporal variance) to, e.g. initial conditions, 
         atmospheric forcing, open boundary conditions.
+
+    References
+    ----------
+    .. Yip, S., Ferro, C. A. T., Stephenson, D. B., and Hawkins, E.: A Simple, Coherent Framework for Partitioning Uncertainty in Climate Predictions, J. Climate, 24, 4634–4643
+    .. Zhang, S., Zhou, Z., Peng, P., and Xu, C.: A New Framework for Estimating and Decomposing the Uncertainty of Climate Projections, J. Climate, 37, 365–384
+    .. Coquereau, A., Sévellec, F., Huck, T., Hirschi, J. J. M., & Jamet, Q. (2026). Past, Present, and Future Variability of Atlantic Meridional Overturning Circulation in CMIP6 Ensembles. Earth System Dynamics, 17(2), 209-233.
+
     """
     
     #-- verify that da is a xarray dataArray, then convert into a dataset --
