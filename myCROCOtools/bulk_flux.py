@@ -68,11 +68,14 @@ class BulkFluxCOARE:
         # stochastic perturbation
         self.sto = sto
         if sto:
-            self.mu = 0.0                   
-            self.sigma = 0.01
+            self.ave     = 0.0               # mean of the distribution
+            self.std     = 0.1               # standard deviation
+            self.distrib = 'lognormal'       # type of distribution ('normal', 'lognormal')
+            self.npasses = 20                # number of passes of Laplacian filter
+            self.n_sto   = 10                # number of ensemble
 
     def timemonitor(self):
-        print("--- ", (datetime.utcnow()-self.t0).total_seconds(), " sec --")
+        print(f"--- {(datetime.utcnow()-self.t0).total_seconds()} sec --")
         self.t0 = datetime.utcnow()
         
     def make_xgrid(self, ds):
@@ -98,43 +101,39 @@ class BulkFluxCOARE:
         # TBD
 
 
-    def stogen(self, ds):
+    def stogen(self, da_in, mask):
         """
-        Stochastic field generator.
-        ds is used as reference to construct appropriate stochatic field.
+        Random number generatore, in the spirit of  STOGEN but much lighter in capabilities (and performance likley).
+        da_in is used as reference to construct stochatic fields with appropriate dimension.
+        Can generate normal and lognormal distribution (defined in __init__()) and account for land-sea mask.
         """
-        if 'time' in ds.dims: 
-            da = xr.DataArray(
-                np.random.normal(self.mu, self.sigma, 
-                    (ds.dims["time"], ds.dims["eta_rho"], ds.dims["xi_rho"]) ),
-                dims=("time", "eta_rho", "xi_rho"),
-            )
-        elif 'number' in ds.dims:
-            da = xr.DataArray(
-                np.random.normal(self.mu, self.sigma,
-                    (ds.dims["number"], ds.dims["eta_rho"], ds.dims["xi_rho"]) ),
-                dims=("number", "eta_rho", "xi_rho"),
-            )
-        elif 'number_atm' in ds.dims:
-            da = xr.DataArray(
-                np.random.normal(self.mu, self.sigma,
-                    (ds.dims["number_atm"], ds.dims["eta_rho"], ds.dims["xi_rho"]) ),
-                dims=("number_atm", "eta_rho", "xi_rho"),
-            )
-        elif 'number_ocn' in ds.dims:
-            da = xr.DataArray(
-                np.random.normal(self.mu, self.sigma,
-                    (ds.dims["number_ocn"], ds.dims["eta_rho"], ds.dims["xi_rho"]) ),
-                dims=("number_ocn", "eta_rho", "xi_rho"),
-            )
+        
+        dims = ["number_sto"] + list(da_in.dims)
+        shape = (self.n_sto,) + tuple(da_in.sizes[d] for d in da_in.dims)
+        
+        if self.distrib == 'normal':
+            da_sto = xr.DataArray(
+                np.random.normal(self.ave, self.std, shape),
+                dims=dims,
+            ) * mask
+        elif self.distrib == 'lognormal':
+            da_sto = xr.DataArray(
+                np.random.lognormal(self.ave, self.std, shape),
+                dims=dims,
+            ) * mask
         else:
-            da = xr.DataArray(
-                np.random.normal(self.mu, self.sigma,
-                    (ds.dims["eta_rho"], ds.dims["xi_rho"]) ),
-                dims=("eta_rho", "xi_rho"),
-            )
+            sys.exit(f"(in stogen) Bad type of requested distribution. Available are: 'normal', 'lognormal'. Provided: {self.distrib}.")
 
-        return da
+        #-- apply npasses of Laplacian filter --
+        for ipasse in range(self.npasses):
+            cff = (self.xgrid.diff(self.xgrid.diff(da_sto, 'x'), 'x') + 
+                   self.xgrid.diff(self.xgrid.diff(da_sto, 'y'), 'y'))
+            da_sto = da_sto + cff * mask
+
+        #-- restore to original std --
+        da_sto = da_sto * self.std / da_sto.stack(xy=['eta_rho', 'xi_rho']).std(dim='xy')
+        
+        return da_sto
 
 
     def spec_hum(self, RH, psfc, TairC):
@@ -331,6 +330,7 @@ class BulkFluxCOARE:
         
         #-- extract variables from xarray dataset (to be changed) --
         t_sea = ds_ocn.temp
+        mask  = ds_ocn.mask_rho
         tair  = ds_atm.T2M
         rhum  = ds_atm.R
         uwnd  = self.xgrid.interp(ds_atm.U10M, 'x')
@@ -340,8 +340,8 @@ class BulkFluxCOARE:
         
         # generate stochastic 2D field, if needed
         if self.sto:
-            sto2d = self.stogen(ds_atm)
-            t_sea = t_sea*(1+sto2d)
+            print(f"Generate {self.n_sto} stochastic fields.")
+            sto2d = self.stogen(tair, mask)
         
         # Basic atmospheric variables
         psurf = patm2d
@@ -501,27 +501,32 @@ class BulkFluxCOARE:
             sustr_cstCd += stau * self.xgrid.interp(ds_ocn.u, 'x')
             svstr_cstCd += stau * self.xgrid.interp(ds_ocn.v, 'y')
         
-        # output
+        # output (NEED SOME IMPROVEMENTS, E.G. THROUGH A DO LOOP ON VARIABLES)
+        dims = list(ds_ocn.temp.dims)
+        if self.sto:
+            dims_sto = ["number_sto"] + dims
+        
         ds_out = xr.Dataset(
             data_vars=dict(
-                zolu=(ds_ocn.temp.dims, ZoLu.data),
-                psi_u=(ds_ocn.temp.dims, psi_u.data),
-                charn=(ds_ocn.temp.dims, charn.data),
-                delw=(ds_ocn.temp.dims, delW[0, ::].data),
-                wstar=(ds_ocn.temp.dims, Wstar[0, ::].data),
-                tstar=(ds_ocn.temp.dims, Tstar.data),
-                qstar=(ds_ocn.temp.dims, Qstar.data),
-                cd=(ds_ocn.temp.dims, Cd),
-                cd_cfb=(ds_ocn.temp.dims, Cd_cfb),
-                sustr0=(ds_ocn.temp.dims, sustr0.data),
-                svstr0=(ds_ocn.temp.dims, svstr0.data),
-                sustr=(ds_ocn.temp.dims, sustr.data),
-                svstr=(ds_ocn.temp.dims, svstr.data),
-                sustr_cstCd=(ds_ocn.temp.dims, sustr_cstCd.data),
-                svstr_cstCd=(ds_ocn.temp.dims, svstr_cstCd.data),
+                zolu        = (dims, ZoLu.data),
+                psi_u       = (dims, psi_u.data),
+                charn       = (dims, charn.data),
+                delw        = (dims, delW[0, ::].data),
+                wstar       = (dims, Wstar[0, ::].data),
+                tstar       = (dims, Tstar.data),
+                qstar       = (dims, Qstar.data),
+                cd          = (dims, Cd),
+                cd_cfb      = (dims, Cd_cfb),
+                sustr0      = (dims, sustr0.data),
+                svstr0      = (dims, svstr0.data),
+                sustr       = (dims, sustr.data),
+                svstr       = (dims, svstr.data),
+                sustr_cstCd = (dims, sustr_cstCd.data),
+                svstr_cstCd = (dims, svstr_cstCd.data),
+                sto2d       = (dims_sto, sto2d)
             ),
             coords=ds_atm.coords,
-            attrs=dict(description="Recomputed AO transfer coefficients, turbulent scales and associated fluxes"),
+            attrs=dict(description="Recomputed AO transfer coefficients, turbulent scales and associated fluxes, possibly stochastically perturbed"),
         )
         if self.cfb:
             ds_out["stau"] = (ds_ocn.temp.dims, stau)
