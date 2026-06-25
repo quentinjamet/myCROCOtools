@@ -219,11 +219,7 @@ class BulkFluxCOARE:
         """COARE stability function for velocity"""
         unstable = ZoL <= 0.0
     
-        # Unstable conditions
-        tmpZoL = xr.DataArray(
-            np.where(unstable.values, ZoL.values, 0.0),
-            dims=ZoL.dims, coords=ZoL.coords
-        )
+        tmpZoL = xr.where(unstable, ZoL, 0.0)
     
         chik = (1.0 - 15.0 * tmpZoL) ** 0.25
         psik = (2.0 * np.log(0.5 * (1.0 + chik)) +
@@ -237,29 +233,19 @@ class BulkFluxCOARE:
     
         psi_unstable = psic + (psik - psic) / (1.0 + ZoL**2)
     
-        # Stable conditions
-        tmpZoL = xr.DataArray(
-            np.where(~unstable.values, ZoL.values, 0.0),
-            dims=ZoL.dims, coords=ZoL.coords
-        )
-        chic_stable = -np.minimum(50.0, 0.35 * tmpZoL)
+        tmpZoL = xr.where(~unstable, ZoL, 0.0)
+        chic_stable = -(0.35 * tmpZoL).clip(max=50.0)
         psi_stable = -((1.0 + tmpZoL) + 0.6667 * (tmpZoL - 14.28) *
                       np.exp(chic_stable) + 8.525)
     
-        return xr.DataArray(
-            np.where(unstable.values, psi_unstable.values, psi_stable.values),
-            dims=ZoL.dims, coords=ZoL.coords
-        )
-
+        return xr.where(unstable, psi_unstable, psi_stable)
+    
+    
     def bulk_psit_coare(self, ZoL):
         """COARE stability function for tracers"""
         unstable = ZoL < 0.0
     
-        # Unstable conditions
-        tmpZoL = xr.DataArray(
-            np.where(unstable.values, ZoL.values, 0.0),
-            dims=ZoL.dims, coords=ZoL.coords
-        )
+        tmpZoL = xr.where(unstable, ZoL, 0.0)
     
         chik = (1.0 - 15.0 * tmpZoL) ** 0.25
         psik = 2.0 * np.log(0.5 * (1.0 + chik**2))
@@ -271,20 +257,13 @@ class BulkFluxCOARE:
     
         psi_unstable = psic + (psik - psic) / (1.0 + ZoL**2)
     
-        # Stable conditions
-        tmpZoL = xr.DataArray(
-            np.where(~unstable.values, ZoL.values, 0.0),
-            dims=ZoL.dims, coords=ZoL.coords
-        )
-        chic_stable = -np.minimum(50.0, 0.35 * tmpZoL)
+        tmpZoL = xr.where(~unstable, ZoL, 0.0)
+        chic_stable = -(0.35 * tmpZoL).clip(max=50.0)
         psi_stable = -((1.0 + 2.0*tmpZoL/3.0)**1.5 +
                       0.6667 * (tmpZoL - 14.28) * np.exp(chic_stable) + 8.525)
     
-        return xr.DataArray(
-            np.where(unstable.values, psi_unstable.values, psi_stable.values),
-            dims=ZoL.dims, coords=ZoL.coords
-        )
-    
+        return xr.where(unstable, psi_unstable, psi_stable)
+
     def comp_wspd(self, ds_atm, ds_ocn):
         """
         Compute wind speed from atmospheric forcing file (assuming wind components both at rho-points),
