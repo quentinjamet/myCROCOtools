@@ -425,11 +425,7 @@ class BulkFluxCOARE:
             unstable = Ri < 0.0
             ZoLu_unstable = CC * Ri / (1.0 + Ri / Ribcu)
             ZoLu_stable = CC * Ri / (1.0 + 3.0 * Ri / CC)
-            ZoLu = xr.DataArray(
-                np.where(unstable.values, ZoLu_unstable.values, ZoLu_stable.values),
-                dims=Ri.dims,
-                coords=Ri.coords
-            )
+            ZoLu = xr.where(unstable, ZoLu_unstable, ZoLu_stable)
             
             psi_u = self.bulk_psiu_coare(ZoLu)
             logus10 = np.log(self.blk_ZW * iZo10)
@@ -447,13 +443,10 @@ class BulkFluxCOARE:
         # Charnock coefficient as a function of wind
         print("Compute Charnock coef.")
         w0 = delW.isel(component=0)
-        charn = xr.DataArray(
-            np.where(w0.values > 18.0, 0.018,
-            np.where(w0.values > 10.0,
-                     0.011 + 0.125 * (0.018 - 0.011) * (w0.values - 10.0),
-                     0.011)),
-            dims=w0.dims, coords=w0.coords
-        )
+        charn = xr.where(w0 > 18.0, 0.018,
+                xr.where(w0 > 10.0,
+                         0.011 + 0.125 * (0.018 - 0.011) * (w0 - 10.0),
+                         0.011))
 
         self.timemonitor()
         
@@ -470,7 +463,7 @@ class BulkFluxCOARE:
                 
                 # Thermal roughness length
                 Rr = Wstar_m / (iZoW * VisAir)
-                iZoT = np.maximum(8695.65, 18181.8 * ( np.where(Rr > 0., Rr, 0.0)**0.6))
+                iZoT = np.maximum(8695.65, 18181.8 * ( xr.where(Rr > 0., Rr, 0.0)**0.6))
                 
                 # Monin-Obukhov stability parameter
                 ZoLu = (self.vonKar * self.g * self.blk_ZW * 
@@ -499,7 +492,7 @@ class BulkFluxCOARE:
             for m in range(self.mb):
                 Bf = -self.g / TairK * Wstar.isel(component=m) * (Tstar + self.cpvir * TairK * Qstar)
                 cff_gust = xr.where(Bf > 0.0,
-                                    self.blk_beta * (xr.where(Bf > 0., Bf, 0.0) * self.blk_Zabl) ** self.r3,
+                                    self.blk_beta * (Bf * self.blk_Zabl) ** self.r3,
                                     0.2)
                 delW_list.append(np.sqrt(wspd_list[m]**2 + cff_gust**2))
             
