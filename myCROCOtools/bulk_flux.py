@@ -77,6 +77,15 @@ class BulkFluxCOARE:
     def timemonitor(self):
         print(f"--- {(datetime.utcnow()-self.t0).total_seconds()} sec --")
         self.t0 = datetime.utcnow()
+
+    def test_xarray(self, var, name):
+        if isinstance(var, xr.DataArray):
+            print(f"--- TEST --- {name} is an xr.DataArray ---")
+            print(f"--- TEST ---{name}.dims: {var.dims}")
+        else:
+            print(f"--- TEST --- {name} is NOT an xr.DataArray ---")
+            print(f"--- TEST ---{name}.shape: {var.shape}")
+
         
     def make_xgrid(self, ds):
         """
@@ -130,8 +139,8 @@ class BulkFluxCOARE:
                    self.xgrid.diff(self.xgrid.diff(da_sto, 'y'), 'y'))
             da_sto = da_sto + cff * mask
 
-        #-- restore to original std --
-        da_sto = da_sto * self.std / da_sto.stack(xy=['eta_rho', 'xi_rho']).std(dim='xy')
+        #-- restore to original std (without counting land points) --
+        da_sto = da_sto * self.std / da_sto.where(da_sto != 0).stack(xy=['eta_rho', 'xi_rho']).std(dim='xy')
         
         return da_sto
 
@@ -209,54 +218,72 @@ class BulkFluxCOARE:
     def bulk_psiu_coare(self, ZoL):
         """COARE stability function for velocity"""
         unstable = ZoL <= 0.0
-        
-        # Unstable conditions - use np.where to avoid indexing issues
-        tmpZoL = np.where(unstable, ZoL, 0.0)
-        
+    
+        # Unstable conditions
+        tmpZoL = xr.DataArray(
+            np.where(unstable.values, ZoL.values, 0.0),
+            dims=ZoL.dims, coords=ZoL.coords
+        )
+    
         chik = (1.0 - 15.0 * tmpZoL) ** 0.25
-        psik = (2.0 * np.log(0.5 * (1.0 + chik)) + 
-                np.log(0.5 * (1.0 + chik**2)) - 
+        psik = (2.0 * np.log(0.5 * (1.0 + chik)) +
+                np.log(0.5 * (1.0 + chik**2)) -
                 2.0 * np.arctan(chik) + self.pis2)
-        
+    
         chic = (1.0 - 10.15 * tmpZoL) ** self.r3
-        psic = (1.5 * np.log(self.r3 * (chic**2 + chic + 1.0)) - 
-                self.sqr3 * np.arctan((2.0*chic + 1.0)/self.sqr3) + 
+        psic = (1.5 * np.log(self.r3 * (chic**2 + chic + 1.0)) -
+                self.sqr3 * np.arctan((2.0*chic + 1.0)/self.sqr3) +
                 2.0 * self.pis2osqr3)
-        
+    
         psi_unstable = psic + (psik - psic) / (1.0 + ZoL**2)
-        
+    
         # Stable conditions
-        tmpZoL = np.where(~unstable, ZoL, 0.0)
+        tmpZoL = xr.DataArray(
+            np.where(~unstable.values, ZoL.values, 0.0),
+            dims=ZoL.dims, coords=ZoL.coords
+        )
         chic_stable = -np.minimum(50.0, 0.35 * tmpZoL)
-        psi_stable = -((1.0 + tmpZoL) + 0.6667 * (tmpZoL - 14.28) * 
+        psi_stable = -((1.0 + tmpZoL) + 0.6667 * (tmpZoL - 14.28) *
                       np.exp(chic_stable) + 8.525)
-        
-        return np.where(unstable, psi_unstable, psi_stable)
+    
+        return xr.DataArray(
+            np.where(unstable.values, psi_unstable.values, psi_stable.values),
+            dims=ZoL.dims, coords=ZoL.coords
+        )
 
     def bulk_psit_coare(self, ZoL):
         """COARE stability function for tracers"""
         unstable = ZoL < 0.0
-        
-        # Unstable conditions - use np.where to avoid indexing issues
-        tmpZoL = np.where(unstable, ZoL, 0.0)
-        
+    
+        # Unstable conditions
+        tmpZoL = xr.DataArray(
+            np.where(unstable.values, ZoL.values, 0.0),
+            dims=ZoL.dims, coords=ZoL.coords
+        )
+    
         chik = (1.0 - 15.0 * tmpZoL) ** 0.25
         psik = 2.0 * np.log(0.5 * (1.0 + chik**2))
-        
+    
         chic = (1.0 - 34.15 * tmpZoL) ** self.r3
-        psic = (1.5 * np.log((chic**2 + chic + 1.0) * self.r3) - 
-                self.sqr3 * np.arctan((2.0*chic + 1.0)/self.sqr3) + 
+        psic = (1.5 * np.log((chic**2 + chic + 1.0) * self.r3) -
+                self.sqr3 * np.arctan((2.0*chic + 1.0)/self.sqr3) +
                 2.0 * self.pis2osqr3)
-        
+    
         psi_unstable = psic + (psik - psic) / (1.0 + ZoL**2)
-        
+    
         # Stable conditions
-        tmpZoL = np.where(~unstable, ZoL, 0.0)
+        tmpZoL = xr.DataArray(
+            np.where(~unstable.values, ZoL.values, 0.0),
+            dims=ZoL.dims, coords=ZoL.coords
+        )
         chic_stable = -np.minimum(50.0, 0.35 * tmpZoL)
-        psi_stable = -((1.0 + 2.0*tmpZoL/3.0)**1.5 + 
+        psi_stable = -((1.0 + 2.0*tmpZoL/3.0)**1.5 +
                       0.6667 * (tmpZoL - 14.28) * np.exp(chic_stable) + 8.525)
-        
-        return np.where(unstable, psi_unstable, psi_stable)
+    
+        return xr.DataArray(
+            np.where(unstable.values, psi_unstable.values, psi_stable.values),
+            dims=ZoL.dims, coords=ZoL.coords
+        )
     
     def comp_wspd(self, ds_atm, ds_ocn):
         """
@@ -340,8 +367,10 @@ class BulkFluxCOARE:
         
         # generate stochastic 2D field, if needed
         if self.sto:
-            print(f"Generate {self.n_sto} stochastic fields.")
+            print(f"Generate {self.n_sto} stochastic fields")
             sto2d = self.stogen(tair, mask)
+            t_sea = t_sea * (1.0 + sto2d)
+            print(f"t_sea.dims: {t_sea.dims}")
         
         # Basic atmospheric variables
         psurf = patm2d
@@ -349,7 +378,7 @@ class BulkFluxCOARE:
         
         wspd0 = np.maximum(wspd, 0.1 * np.minimum(10.0, self.blk_ZW))
         wspd0_cfb = np.maximum(wspd_cfb, 0.1 * np.minimum(10.0, self.blk_ZW))
-        
+ 
         TairC = tair
         TairK = TairC + self.CtoK
         TseaC = t_sea
@@ -377,11 +406,13 @@ class BulkFluxCOARE:
         
         # Air-sea gradients
         print("Compute air-sea gradients")
-        delW = np.zeros((2,) + wspd0_cfb.shape)
-        delW[0, ::] = np.sqrt(wspd0**2 + 0.25)
-        delW[1, ::] = np.sqrt(wspd0_cfb**2 + 0.25)
+        delW = xr.concat([
+            np.sqrt(wspd0**2 + 0.25),
+            np.sqrt(wspd0_cfb**2 + 0.25)
+        ], dim="component")
         delQ = Q - Qsea
         #self.timemonitor()
+        #self.test_xarray(delW, "delW")
         
         cff = self.CtoK * (iexna - iexns)
         delT = TairC * iexna - TseaC * iexns + cff
@@ -390,46 +421,60 @@ class BulkFluxCOARE:
         
         # Initial estimate
         print("==== First guess ====")
-        Wstar = np.zeros_like(delW)
-        Wstar[:] = 0.035 * delW * self.Log10oLogZw
+        #Wstar = np.zeros_like(delW)
+        Wstar = 0.035 * delW * self.Log10oLogZw
         
         VisAir = self.air_visc(TairC)
         charn = xr.full_like(TairC, 0.011)
         Ch10 = 0.00115
         Ribcu = -self.blk_ZW / (self.blk_Zabl * 0.004 * self.blk_beta**3)
+
         
         # Initial roughness length scale calculation
+        Wstar_list = []
         for m in range(self.mb):
-            iZo10 = self.g * Wstar[m, ::] / (charn * Wstar[m, ::]**3 + 0.11 * self.g * VisAir)
+            Wstar_m = Wstar.isel(component=m)
+
+            iZo10 = self.g * Wstar_m / (charn * Wstar_m**3 + 0.11 * self.g * VisAir)
             iZoT10 = 0.1 * np.exp(self.vonKar**2 / (Ch10 * np.log(10.0 * iZo10)))
             
             CC = (np.log(self.blk_ZW * iZo10)**2) / np.log(self.blk_ZT * iZoT10)
             Ri = (self.g * self.blk_ZW * (delT + self.cpvir * TairK * delQ) / 
-                  (TairK * delW[m, ::]**2))
+                  (TairK * delW.isel(component=m)**2))
             
             # Stability parameter
             unstable = Ri < 0.0
             ZoLu_unstable = CC * Ri / (1.0 + Ri / Ribcu)
             ZoLu_stable = CC * Ri / (1.0 + 3.0 * Ri / CC)
-            ZoLu = np.where(unstable, ZoLu_unstable, ZoLu_stable)
+            ZoLu = xr.DataArray(
+                np.where(unstable.values, ZoLu_unstable.values, ZoLu_stable.values),
+                dims=Ri.dims,
+                coords=Ri.coords
+            )
             
             psi_u = self.bulk_psiu_coare(ZoLu)
             logus10 = np.log(self.blk_ZW * iZo10)
-            Wstar[m, ::] = delW[m, ::] * self.vonKar / (logus10 - psi_u)
-        
+            Wstar_list.append(delW.isel(component=m) * self.vonKar / (logus10 - psi_u))
+       
+        Wstar = xr.concat(Wstar_list, dim="component")
+ 
         ZoLt = ZoLu * self.blk_ZToZW
         psi_t = self.bulk_psit_coare(ZoLt)
         logts10 = np.log(self.blk_ZT * iZoT10)
         cff_t = self.vonKar / (logts10 - psi_t)
         Tstar = delT * cff_t
         Qstar = delQ * cff_t
-        
+
         # Charnock coefficient as a function of wind
         print("Compute Charnock coef.")
-        charn = np.where(delW[0, ::] > 18.0, 0.018,
-                np.where(delW[0, ::] > 10.0, 
-                        0.011 + 0.125 * (0.018 - 0.011) * (delW[0, ::] - 10.0),
-                        0.011))
+        w0 = delW.isel(component=0)
+        charn = xr.DataArray(
+            np.where(w0.values > 18.0, 0.018,
+            np.where(w0.values > 10.0,
+                     0.011 + 0.125 * (0.018 - 0.011) * (w0.values - 10.0),
+                     0.011)),
+            dims=w0.dims, coords=w0.coords
+        )
 
         self.timemonitor()
         
@@ -437,24 +482,29 @@ class BulkFluxCOARE:
         print("==== Iterative estimates ====")
         for iteration in range(self.IterFl):
             print(str(r"   (iter = %i/%i )" %(iteration, self.IterFl-1)))
+            Wstar_list = []
             for m in range(self.mb):
+                Wstar_m = Wstar.isel(component=m)
+
                 # Roughness length
-                iZoW = self.g * Wstar[m, ::] / (charn * Wstar[m, ::]**3 + 0.11 * self.g * VisAir)
+                iZoW = self.g * Wstar_m / (charn * Wstar_m**3 + 0.11 * self.g * VisAir)
                 
                 # Thermal roughness length
-                Rr = Wstar[m, ::] / (iZoW * VisAir)
+                Rr = Wstar_m / (iZoW * VisAir)
                 iZoT = np.maximum(8695.65, 18181.8 * ( np.where(Rr > 0., Rr, 0.0)**0.6))
                 
                 # Monin-Obukhov stability parameter
                 ZoLu = (self.vonKar * self.g * self.blk_ZW * 
                        (Tstar * (1.0 + self.cpvir * Q) + self.cpvir * TairK * Qstar) /
-                       (TairK * Wstar[m, ::]**2 * (1.0 + self.cpvir * Q) + self.eps))
+                       (TairK * Wstar_m**2 * (1.0 + self.cpvir * Q) + self.eps))
 
                 # Stability functions
                 psi_u = self.bulk_psiu_coare(ZoLu)
                 logus10 = np.log(self.blk_ZW * iZoW)
-                Wstar[m, ::] = delW[m, ::] * self.vonKar / (logus10 - psi_u)
+                Wstar_list.append(delW.isel(component=m) * self.vonKar / (logus10 - psi_u))
             
+            Wstar = xr.concat(Wstar_list, dim="component")
+ 
             ZoLt = ZoLu * self.blk_ZToZW  # Use the last calculated ZoLu
             psi_t = self.bulk_psit_coare(ZoLt)
             
@@ -463,25 +513,26 @@ class BulkFluxCOARE:
             cff_t = self.vonKar / (logts10 - psi_t)
             Tstar = delT * cff_t
             Qstar = delQ * cff_t
-            
+           
             # Gustiness (free convection)
+            delW_list = []
+            wspd_list = [wspd0, wspd0_cfb]  # indexé par m
             for m in range(self.mb):
-                Bf = -self.g / TairK * Wstar[m, ::] * (Tstar + self.cpvir * TairK * Qstar)
-                cff_gust = np.where(Bf > 0.0, 
-                                  self.blk_beta * (np.where(Bf > 0., Bf, 0.0) * self.blk_Zabl) ** self.r3,
-                                  0.2)
-                if m == 0:
-                    delW[m, ::] = np.sqrt(wspd0**2 + cff_gust**2)
-                else:
-                    delW[m, ::] = np.sqrt(wspd0_cfb**2 + cff_gust**2)
-
+                Bf = -self.g / TairK * Wstar.isel(component=m) * (Tstar + self.cpvir * TairK * Qstar)
+                cff_gust = xr.where(Bf > 0.0,
+                                    self.blk_beta * (xr.where(Bf > 0., Bf, 0.0) * self.blk_Zabl) ** self.r3,
+                                    0.2)
+                delW_list.append(np.sqrt(wspd_list[m]**2 + cff_gust**2))
+            
+            delW = xr.concat(delW_list, dim="component")
+ 
             self.timemonitor()
         
         # Transfer coefficients
         print("Transfer coefficient")
-        aer  = rhoAir * delW[0, ::]
-        Cd   = (Wstar[0, ::] / delW[0, ::])**2
-        Cd_cfb = (Wstar[1, ::] / delW[1, ::])**2
+        aer  = rhoAir * delW.isel(component=0)
+        Cd   = (Wstar.isel(component=0) / delW.isel(component=0))**2
+        Cd_cfb = (Wstar.isel(component=1) / delW.isel(component=1))**2
 
         # wind stress (@ rho-pts)
         sustr = Cd*aer*ds_atm.U10M
@@ -495,41 +546,56 @@ class BulkFluxCOARE:
             sustr0 = sustr.copy()
             svstr0 = svstr.copy()
             # update with current feedback (stress-correction approach)
-            stau = self.cfb_slope * delW[0, ::] + self.cfb_offset
+            stau = self.cfb_slope * delW.isel(component=0) + self.cfb_offset
             sustr += stau * self.xgrid.interp(ds_ocn.u, 'x')
             svstr += stau * self.xgrid.interp(ds_ocn.v, 'y')
             sustr_cstCd += stau * self.xgrid.interp(ds_ocn.u, 'x')
             svstr_cstCd += stau * self.xgrid.interp(ds_ocn.v, 'y')
         
-        # output (NEED SOME IMPROVEMENTS, E.G. THROUGH A DO LOOP ON VARIABLES)
-        dims = list(ds_ocn.temp.dims)
-        if self.sto:
-            dims_sto = ["number_sto"] + dims
+        # output 
+        data_vars = {
+            "cd"    : Cd,
+            "sustr" : sustr,
+            "svstr" : svstr,
+        }
+
+        ds_vars = {}
+        for name, var in data_vars.items():
+            ds_vars[name] = var.compute()
         
         ds_out = xr.Dataset(
-            data_vars=dict(
-                zolu        = (dims, ZoLu.data),
-                psi_u       = (dims, psi_u.data),
-                charn       = (dims, charn.data),
-                delw        = (dims, delW[0, ::].data),
-                wstar       = (dims, Wstar[0, ::].data),
-                tstar       = (dims, Tstar.data),
-                qstar       = (dims, Qstar.data),
-                cd          = (dims, Cd),
-                cd_cfb      = (dims, Cd_cfb),
-                sustr0      = (dims, sustr0.data),
-                svstr0      = (dims, svstr0.data),
-                sustr       = (dims, sustr.data),
-                svstr       = (dims, svstr.data),
-                sustr_cstCd = (dims, sustr_cstCd.data),
-                svstr_cstCd = (dims, svstr_cstCd.data),
-                sto2d       = (dims_sto, sto2d)
-            ),
+            ds_vars,
             coords=ds_atm.coords,
             attrs=dict(description="Recomputed AO transfer coefficients, turbulent scales and associated fluxes, possibly stochastically perturbed"),
         )
-        if self.cfb:
-            ds_out["stau"] = (ds_ocn.temp.dims, stau)
+        
+        if self.sto:
+            ds_out["sto2d"] = sto2d
+
+        # ds_out = xr.Dataset(
+        #     data_vars=dict(
+        #         zolu        = (dims, ZoLu.data),
+        #         psi_u       = (dims, psi_u.data),
+        #         charn       = (dims, charn.data),
+        #         delw        = (dims, delW[0, ::].data),
+        #         wstar       = (dims, Wstar[0, ::].data),
+        #         tstar       = (dims, Tstar.data),
+        #         qstar       = (dims, Qstar.data),
+        #         cd          = (dims, Cd),
+        #         cd_cfb      = (dims, Cd_cfb),
+        #         sustr0      = (dims, sustr0.data),
+        #         svstr0      = (dims, svstr0.data),
+        #         sustr       = (dims, sustr.data),
+        #         svstr       = (dims, svstr.data),
+        #         sustr_cstCd = (dims, sustr_cstCd.data),
+        #         svstr_cstCd = (dims, svstr_cstCd.data),
+        #         sto2d       = (dims_sto, sto2d.data)
+        #     ),
+        #     coords=ds_atm.coords,
+        #     attrs=dict(description="Recomputed AO transfer coefficients, turbulent scales and associated fluxes, possibly stochastically perturbed"),
+        # )
+        #if self.cfb:
+        #    ds_out["stau"] = (ds_ocn.temp.dims, stau)
 
         
         print(" DONE -- time: ", (datetime.utcnow()-self.t00).total_seconds(), ' sec')
