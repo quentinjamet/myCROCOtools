@@ -10,7 +10,9 @@ class BulkFluxCOARE:
     Computes turbulent and radiative air-sea fluxes using the COARE algorithm
     """
     
-    def __init__(self, cfb=False, sto=False):
+    def __init__(self, cfb=False, sto=False,
+                 sto_sst=False, sto_charn=False,
+                 ave=0.0, std=0.1, distrib='normal', npasses=20, nsto=10):
         # Physical constants
         self.g          = 9.81                                # Gravitational acceleration [m/s^2]
         self.vonKar     = 0.41                                # von Karman constant
@@ -67,12 +69,17 @@ class BulkFluxCOARE:
 
         # stochastic perturbation
         self.sto = sto
+        self.sto_sst   = sto_sst if sto else False      # apply stochastic field to SST -- use normal distribution
+        self.sto_charn = sto_charn if sto else False    # apply stochastic field to charnock parameter -- use lognormal distribution
+        #self.sto_cfb1  = sto_cfb1 if sto else False     # apply stochastic field to cfb_slope
+        #self.sto_cfb2  = sto_cfb2 if sto else False     # apply stochastic field to cfb_offset
         if sto:
-            self.ave     = 0.0               # mean of the distribution
-            self.std     = 0.1               # standard deviation
-            self.distrib = 'lognormal'       # type of distribution ('normal', 'lognormal')
-            self.npasses = 20                # number of passes of Laplacian filter
-            self.n_sto   = 10                # number of ensemble
+            self.ave       = ave                        # mean of the distribution
+            self.std       = std                        # standard deviation
+            self.distrib   = distrib                    # type of distribution ('normal', 'lognormal')
+            self.npasses   = npasses                    # number of passes of Laplacian filter
+            self.n_sto     = nsto                       # number of ensemble
+            
 
     def timemonitor(self):
         print(f"--- {(datetime.utcnow()-self.t0).total_seconds()} sec --")
@@ -96,7 +103,7 @@ class BulkFluxCOARE:
         (cf https://xgcm.readthedocs.io/en/latest/grids.html).
         """
         #-- check dataset and remove ghost points if needed --
-        if ds.dims['xi_rho'] != ds.dims['xi_u']:
+        if ds.sizes['xi_rho'] != ds.sizes['xi_u']:
             print("rho-point and u-point do not have the same dimension. "
                   "Assumes presence of ghost points (following CROCO grid convention), and remove them.")
             ds = ds.isel(eta_rho=slice(1, -1), xi_rho=slice(1, -1), eta_v=slice(0, -1), xi_u=slice(0, -1), eta_psi=slice(0, -1), xi_psi=slice(0, -1))
@@ -121,15 +128,18 @@ class BulkFluxCOARE:
         shape = (self.n_sto,) + tuple(da_in.sizes[d] for d in da_in.dims)
         
         if self.distrib == 'normal':
+            print("Generate normal distribution")
             da_sto = xr.DataArray(
                 np.random.normal(self.ave, self.std, shape),
                 dims=dims,
             ) * mask
         elif self.distrib == 'lognormal':
-            da_sto = xr.DataArray(
-                np.random.lognormal(self.ave, self.std, shape),
-                dims=dims,
-            ) * mask
+            print("Generate lognormal distribution")
+            sys.exit("TO BE DONE -- application of Laplacian filter does not conserve lognormal characteristics")
+            #da_sto = xr.DataArray(
+            #    np.random.lognormal(self.ave, self.std, shape),
+            #    dims=dims,
+            #) * mask
         else:
             sys.exit(f"(in stogen) Bad type of requested distribution. Available are: 'normal', 'lognormal'. Provided: {self.distrib}.")
 
@@ -320,8 +330,8 @@ class BulkFluxCOARE:
         if 'number' in ds_ocn.dims and 'number' in ds_atm.dims:
             ds_atm = ds_atm.rename({'number': 'number_atm'})
             ds_ocn = ds_ocn.rename({'number': 'number_ocn'})
-            ds_atm = ds_atm.expand_dims(dim={"number_ocn": ds_ocn.dims["number_ocn"]}, axis=1)
-            ds_ocn = ds_ocn.expand_dims(dim={"number_atm": ds_atm.dims["number_atm"]}, axis=0)
+            ds_atm = ds_atm.expand_dims(dim={"number_ocn": ds_ocn.sizes["number_ocn"]}, axis=1)
+            ds_ocn = ds_ocn.expand_dims(dim={"number_atm": ds_atm.sizes["number_atm"]}, axis=0)
         # only ocean dataset has ensemble dimension ; add the dimension to atmospheric dataset
         if 'number' in ds_ocn.dims and 'number' not in ds_atm.dims:
             ds_atm = ds_atm.expand_dims(dim={"number": ds_ocn.dims["number"]}, axis=0)
@@ -344,12 +354,11 @@ class BulkFluxCOARE:
         [wspd, wspd_cfb] = self.comp_wspd(ds_atm, ds_ocn)
         patm2d = ds_atm.MSL
         
-        # generate stochastic 2D field, if needed
-        if self.sto:
-            print(f"Generate {self.n_sto} stochastic fields")
+        # apply stochastic perturbation to SST, if requested
+        if self.sto_sst:
+            print(f"Apply stochastic perturbation (n_sto : {self.n_sto} ; distribution : {self.distrib}) on SST")
             sto2d = self.stogen(tair, mask)
             t_sea = t_sea * (1.0 + sto2d)
-            print(f"t_sea.dims: {t_sea.dims}")
         
         # Basic atmospheric variables
         psurf = patm2d
@@ -447,6 +456,11 @@ class BulkFluxCOARE:
                 xr.where(w0 > 10.0,
                          0.011 + 0.125 * (0.018 - 0.011) * (w0 - 10.0),
                          0.011))
+        # apply stochastic perturbation to charnock parameter, if requested
+        if self.sto_charn:
+            print(f"Apply stochastic perturbation (n_sto : {self.n_sto} ; distribution : {self.distrib}) to Charnock parameter")
+            sto2d = self.stogen(charn, mask)
+            charn = charn * (1+sto2d)
 
         self.timemonitor()
         
@@ -526,6 +540,7 @@ class BulkFluxCOARE:
         
         # output 
         data_vars = {
+            "charn" : charn,
             "cd"    : Cd,
             "sustr" : sustr,
             "svstr" : svstr,
